@@ -505,7 +505,7 @@ class VKAvroraBot:
 {self.get_chat_settings_info(chat_id)}
 
 {EMOJIS['crown']} Администраторы чата ({len(admin_list)}):
-{chr(10).join(admin_list) if admin_list else f'{EMOJIS['cross']} Нет данных'}
+{chr(10).join(admin_list) if admin_list else f"{EMOJIS['cross']} Нет данных"}
 
 {EMOJIS['light']} Используйте /help для списка команд
 """.strip()
