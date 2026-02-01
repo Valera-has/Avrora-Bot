@@ -1136,7 +1136,7 @@ class VKAvroraBot:
         is_admin = self.is_chat_admin(user_id, chat_id)
         
         if is_admin:
-            message = f"""{EMOJIS['robot']} Avrora Chat Manager - Помощь
+            message = f"""{EMOJIS['robot']} [https://vk.ru//avroramanager| Avrora Chat Manager - Помощь]
 
 {EMOJIS['crown']} Команды администраторов чата:
 {EMOJIS['chart']} /admin - Статистика админа
@@ -1170,7 +1170,7 @@ class VKAvroraBot:
 {EMOJIS['light']} Примечание: Администратором считается владелец чата и пользователи с правами администратора в настройках беседы.
 """.strip()
         else:
-            message = f"""{EMOJIS['robot']} Avrora Chat Manager - Помощь
+            message = f"""{EMOJIS['robot']} [https://vk.ru//avroramanager| Avrora Chat Manager - Помощь]
 
 {EMOJIS['user']} Доступные команды:
 {EMOJIS['help']} /help - Эта справка
