@@ -17,85 +17,27 @@ GROUP_ID = "235560929"
 
 # ========== ЭМОЦИИ И СМАЙЛИКИ ==========
 EMOJIS = {
-    # Основные
-    "robot": "🤖",
-    "crown": "👑",
-    "gear": "⚙️",
-    "chart": "📊",
-    "warning": "⚠️",
-    "no_entry": "⛔",
-    "mute": "🔇",
-    "kick": "👢",
-    "rules": "📜",
-    "online": "🟢",
-    "offline": "🔴",
-    "sleep": "😴",
-    "welcome": "👋",
-    "role": "🎭",
-    "profile": "👤",
-    "help": "❓",
-    "exit": "🚪",
-    
-    # Действия
-    "check": "✅",
-    "cross": "❌",
-    "clock": "⏰",
-    "calendar": "📅",
-    "pen": "📝",
-    "police": "👮",
-    "user": "👤",
-    "violator": "👤💢",
-    "ban_hammer": "🔨",
-    
-    # Дополнительные
-    "fire": "🔥",
-    "star": "⭐",
-    "light": "💡",
-    "link": "🔗",
-    "lock": "🔒",
-    "unlock": "🔓",
-    "bell": "🔔",
-    "mega": "📣",
-    "scroll": "📃",
-    "book": "📖",
-    "shield": "🛡️",
-    "gavel": "⚖️",
-    "handcuffs": "🔗",
-    "key": "🔑",
-    "door": "🚪",
-    
-    # Статусы
-    "green_circle": "🟢",
-    "red_circle": "🔴",
-    "yellow_circle": "🟡",
-    "blue_circle": "🔵",
-    "purple_circle": "🟣",
-    
-    # Разное
-    "thinking": "🤔",
-    "cool": "😎",
-    "smile": "😊",
-    "sad": "😢",
-    "angry": "😠",
-    "party": "🎉",
-    "confetti": "🎊",
-    "trophy": "🏆",
-    "medal": "🎖️",
-    "flag": "🎌",
-    
-    # Новые для команд
-    "info": "ℹ️",
-    "poll": "📊",
-    "vote": "🗳️"
+    "robot": "🤖", "crown": "👑", "gear": "⚙️", "chart": "📊", "warning": "⚠️",
+    "no_entry": "⛔", "mute": "🔇", "kick": "👢", "rules": "📜", "online": "🟢",
+    "offline": "🔴", "sleep": "😴", "welcome": "👋", "role": "🎭", "profile": "👤",
+    "help": "❓", "exit": "🚪", "check": "✅", "cross": "❌", "clock": "⏰",
+    "calendar": "📅", "pen": "📝", "police": "👮", "user": "👤", "violator": "👤💢",
+    "ban_hammer": "🔨", "fire": "🔥", "star": "⭐", "light": "💡", "link": "🔗",
+    "lock": "🔒", "unlock": "🔓", "bell": "🔔", "mega": "📣", "scroll": "📃",
+    "book": "📖", "shield": "🛡️", "gavel": "⚖️", "handcuffs": "🔗", "key": "🔑",
+    "door": "🚪", "green_circle": "🟢", "red_circle": "🔴", "yellow_circle": "🟡",
+    "blue_circle": "🔵", "purple_circle": "🟣", "thinking": "🤔", "cool": "😎",
+    "smile": "😊", "sad": "😢", "angry": "😠", "party": "🎉", "confetti": "🎊",
+    "trophy": "🏆", "medal": "🎖️", "flag": "🎌", "info": "ℹ️", "poll": "📊",
+    "vote": "🗳️", "search": "🔍", "message": "💬", "users": "👥", "stats": "📈"
 }
 
 # ========== БАЗА ДАННЫХ ==========
 class Database:
     def __init__(self):
-        # Удаляем старую базу для пересоздания
         if os.path.exists('avrora_bot.db'):
-            os.remove('avrora_bot.db')
-            print(f"{EMOJIS['gear']} Старая база данных удалена, создаем новую...")
+            # Не удаляем базу при каждом запуске
+            print(f"{EMOJIS['gear']} Загружаем существующую базу данных...")
         
         self.conn = sqlite3.connect('avrora_bot.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
@@ -118,14 +60,15 @@ class Database:
             )
         ''')
         
-        # Таблица настроек чата
+        # Таблица настроек чата - ФИКС: добавим недостающие колонки
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS chat_settings (
                 chat_id INTEGER PRIMARY KEY,
                 welcome_message TEXT DEFAULT 'Добро пожаловать в чат!',
-                rules_text TEXT DEFAULT '',
+                rules_text TEXT DEFAULT 'Правила еще не установлены. Администраторы могут установить их командой /createpravila',
                 max_warns INTEGER DEFAULT 3,
-                ban_duration INTEGER DEFAULT 10
+                ban_duration INTEGER DEFAULT 10,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -151,22 +94,26 @@ class Database:
             )
         ''')
         
-        # Таблица опросов (новая)
+        # Таблица опросов
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS polls (
                 poll_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER,
                 creator_id INTEGER,
                 question TEXT,
-                options TEXT,  -- JSON массив вариантов
-                votes TEXT,    -- JSON словарь {user_id: option_index}
+                options TEXT,
+                votes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_active INTEGER DEFAULT 1
             )
         ''')
         
+        # Создаем начальные настройки для чатов, если их нет
+        self.cursor.execute("SELECT chat_id FROM chat_settings")
+        existing_chats = self.cursor.fetchall()
+        
         self.conn.commit()
-        print(f"{EMOJIS['check']} База данных создана успешно")
+        print(f"{EMOJIS['check']} База данных инициализирована")
     
     def get_user(self, user_id: int, chat_id: int) -> Optional[Dict]:
         self.cursor.execute(
@@ -187,7 +134,6 @@ class Database:
             )
             self.conn.commit()
         else:
-            # Если пользователь уже есть, сбрасываем kicked статус
             self.cursor.execute(
                 "UPDATE users SET kicked = 0 WHERE user_id = ? AND chat_id = ?",
                 (user_id, chat_id)
@@ -215,7 +161,6 @@ class Database:
         
         self.update_user(user_id, chat_id, warns=new_warns)
         
-        # Проверяем на бан
         settings = self.get_chat_settings(chat_id)
         max_warns = settings.get('max_warns', 3) if settings else 3
         
@@ -243,17 +188,43 @@ class Database:
         row = self.cursor.fetchone()
         if row:
             columns = [desc[0] for desc in self.cursor.description]
-            return dict(zip(columns, row))
+            settings = dict(zip(columns, row))
+            # Проверяем, есть ли все необходимые поля
+            if 'welcome_message' not in settings:
+                settings['welcome_message'] = 'Добро пожаловать в чат!'
+            if 'rules_text' not in settings:
+                settings['rules_text'] = 'Правила еще не установлены. Администраторы могут установить их командой /createpravila'
+            if 'max_warns' not in settings:
+                settings['max_warns'] = 3
+            if 'ban_duration' not in settings:
+                settings['ban_duration'] = 10
+            return settings
         
-        # Создаем настройки по умолчанию
+        # Создаем настройки по умолчанию, если их нет
+        default_settings = {
+            'chat_id': chat_id,
+            'welcome_message': 'Добро пожаловать в чат!',
+            'rules_text': 'Правила еще не установлены. Администраторы могут установить их командой /createpravila',
+            'max_warns': 3,
+            'ban_duration': 10
+        }
+        
         self.cursor.execute(
-            "INSERT OR IGNORE INTO chat_settings (chat_id) VALUES (?)",
-            (chat_id,)
+            "INSERT INTO chat_settings (chat_id, welcome_message, rules_text, max_warns, ban_duration) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, 
+             default_settings['welcome_message'],
+             default_settings['rules_text'],
+             default_settings['max_warns'],
+             default_settings['ban_duration'])
         )
         self.conn.commit()
+        
         return self.get_chat_settings(chat_id)
     
     def update_chat_settings(self, chat_id: int, **kwargs):
+        # Сначала убедимся, что настройки существуют
+        self.get_chat_settings(chat_id)
+        
         set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
         values = list(kwargs.values()) + [chat_id]
         
@@ -262,13 +233,29 @@ class Database:
             values
         )
         self.conn.commit()
+        return True
     
     def set_rules(self, chat_id: int, rules_text: str):
-        self.update_chat_settings(chat_id, rules_text=rules_text)
+        """ФИКС: Правильно сохраняет правила"""
+        return self.update_chat_settings(chat_id, rules_text=rules_text)
     
     def get_rules(self, chat_id: int) -> str:
+        """ФИКС: Получает правила из настроек"""
         settings = self.get_chat_settings(chat_id)
-        return settings.get('rules_text', '') if settings else ''
+        if settings and 'rules_text' in settings:
+            return settings['rules_text']
+        return 'Правила еще не установлены. Администраторы могут установить их командой /createpravila'
+    
+    def set_welcome_message(self, chat_id: int, welcome_message: str):
+        """ФИКС: Сохраняет приветственное сообщение"""
+        return self.update_chat_settings(chat_id, welcome_message=welcome_message)
+    
+    def get_welcome_message(self, chat_id: int) -> str:
+        """ФИКС: Получает приветственное сообщение"""
+        settings = self.get_chat_settings(chat_id)
+        if settings and 'welcome_message' in settings:
+            return settings['welcome_message']
+        return 'Добро пожаловать в чат!'
     
     def set_role(self, user_id: int, chat_id: int, role_name: str):
         self.cursor.execute(
@@ -307,7 +294,6 @@ class Database:
         else:
             stats = {'total_users': 0, 'warned_users': 0, 'muted_users': 0, 'banned_users': 0}
         
-        # Количество варнов за сегодня
         today = datetime.date.today().strftime('%Y-%m-%d')
         self.cursor.execute(
             "SELECT COUNT(*) FROM warns_history WHERE chat_id = ? AND date(date) = date(?)",
@@ -322,7 +308,6 @@ class Database:
         if not user:
             return {}
         
-        # История варнов
         self.cursor.execute(
             "SELECT COUNT(*) FROM warns_history WHERE user_id = ? AND chat_id = ?",
             (user_id, chat_id)
@@ -340,7 +325,7 @@ class Database:
             'join_date': user['join_date']
         }
     
-    # Методы для опросов (новые)
+    # Методы для опросов
     def create_poll(self, chat_id: int, creator_id: int, question: str, options: List[str]) -> int:
         options_json = json.dumps(options, ensure_ascii=False)
         votes_json = json.dumps({}, ensure_ascii=False)
@@ -361,7 +346,6 @@ class Database:
         if row:
             columns = [desc[0] for desc in self.cursor.description]
             result = dict(zip(columns, row))
-            # Декодируем JSON поля
             result['options'] = json.loads(result['options'])
             result['votes'] = json.loads(result['votes'])
             return result
@@ -373,15 +357,12 @@ class Database:
             return False
         
         votes = poll['votes']
-        # Если пользователь уже голосовал, удаляем старый голос
         if str(user_id) in votes:
             del votes[str(user_id)]
         
-        # Добавляем новый голос
         votes[str(user_id)] = option_index
-        
-        # Сохраняем обратно в базу
         votes_json = json.dumps(votes, ensure_ascii=False)
+        
         self.cursor.execute(
             "UPDATE polls SET votes = ? WHERE poll_id = ?",
             (votes_json, poll_id)
@@ -397,7 +378,6 @@ class Database:
         votes = poll['votes']
         options = poll['options']
         
-        # Подсчитываем голоса для каждого варианта
         results = {i: 0 for i in range(len(options))}
         for vote in votes.values():
             if vote in results:
@@ -413,13 +393,6 @@ class Database:
             'creator_id': poll['creator_id'],
             'created_at': poll['created_at']
         }
-    
-    def close_poll(self, poll_id: int):
-        self.cursor.execute(
-            "UPDATE polls SET is_active = 0 WHERE poll_id = ?",
-            (poll_id,)
-        )
-        self.conn.commit()
     
     def get_active_polls(self, chat_id: int) -> List[Dict]:
         self.cursor.execute(
@@ -437,12 +410,8 @@ class VKAvroraBot:
         self.longpoll = VkBotLongPoll(self.vk_session, GROUP_ID)
         self.db = Database()
         
-        # Кэш админов чата
         self.chat_admins_cache = {}
         self.cache_timeout = 300
-        
-        # Активные опросы
-        self.active_polls = {}
         
         print(f"{EMOJIS['robot']} AVRORA Manager Bot запущен!")
         print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в чате")
@@ -518,21 +487,17 @@ class VKAvroraBot:
         }
     
     def extract_mention_or_id(self, text: str, reply_message: Optional[Dict] = None) -> Optional[int]:
-        # Проверяем упоминание: [id123456789|Имя]
         match = re.search(r'\[id(\d+)\|', text)
         if match:
             return int(match.group(1))
         
-        # Проверяем упоминание: @id123456789
         match = re.search(r'@id(\d+)', text)
         if match:
             return int(match.group(1))
         
-        # Если есть ответное сообщение, берем отправителя ответа
         if reply_message and 'from_id' in reply_message:
             return reply_message['from_id']
         
-        # Пробуем найти цифровой ID в тексте
         match = re.search(r'\b(\d{5,})\b', text)
         if match:
             return int(match.group(1))
@@ -580,7 +545,133 @@ class VKAvroraBot:
         dt = datetime.datetime.fromtimestamp(timestamp)
         return dt.strftime("%d.%m.%Y %H:%M")
     
-    # ========== КОМАНДЫ ==========
+    # ========== ИСПРАВЛЕННЫЕ КОМАНДЫ ==========
+    
+    def handle_create_rules(self, user_id: int, chat_id: int, args: str):
+        """ФИКСИРОВАННАЯ команда: /createpravila - установка правил"""
+        if not self.is_chat_admin(user_id, chat_id):
+            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
+            return
+        
+        if not args.strip():
+            self.send_message(chat_id, f"""{EMOJIS['rules']} Использование: /createpravila [текст правил]
+
+{EMOJIS['light']} Пример:
+/createpravila 1. Не спамить
+2. Уважать других
+3. Не рекламировать""")
+            return
+        
+        # ФИКС: Правильно сохраняем правила
+        if self.db.set_rules(chat_id, args.strip()):
+            message = f"""{EMOJIS['check']} {EMOJIS['rules']} Правила чата обновлены!
+
+{EMOJIS['scroll']} Новые правила установлены.
+{EMOJIS['light']} Теперь участники могут посмотреть их командой /правила
+
+{EMOJIS['book']} Для просмотра: /правила
+{EMOJIS['pen']} Для редактирования: /createpravila [новый текст]
+""".strip()
+        else:
+            message = f"{EMOJIS['cross']} Ошибка при сохранении правил. Попробуйте еще раз."
+        
+        self.send_message(chat_id, message)
+    
+    def handle_welcome(self, user_id: int, chat_id: int, args: str):
+        """ФИКСИРОВАННАЯ команда: /приветствие - установка приветствия"""
+        if not self.is_chat_admin(user_id, chat_id):
+            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
+            return
+        
+        if not args.strip():
+            current_welcome = self.db.get_welcome_message(chat_id)
+            self.send_message(chat_id, f"""{EMOJIS['welcome']} Текущее приветствие: 
+{current_welcome}
+
+{EMOJIS['light']} Использование: /приветствие [текст]
+Пример: /приветствие Добро пожаловать в наш чат! Правила: /правила""")
+            return
+        
+        # ФИКС: Правильно сохраняем приветствие
+        if self.db.set_welcome_message(chat_id, args.strip()):
+            message = f"""{EMOJIS['check']} {EMOJIS['welcome']} Приветствие обновлено!
+
+{EMOJIS['scroll']} Новое приветствие:
+{args.strip()}
+
+{EMOJIS['light']} Теперь это сообщение будет показываться новым участникам при входе в чат.
+""".strip()
+        else:
+            message = f"{EMOJIS['cross']} Ошибка при сохранении приветствия. Попробуйте еще раз."
+        
+        self.send_message(chat_id, message)
+    
+    def handle_rules(self, user_id: int, chat_id: int):
+        """ФИКСИРОВАННАЯ команда: /правила - просмотр правил"""
+        rules_text = self.db.get_rules(chat_id)
+        
+        if not rules_text or rules_text == 'Правила еще не установлены. Администраторы могут установить их командой /createpravila':
+            message = f"""{EMOJIS['rules']} Правила чата
+
+{EMOJIS['warning']} Правила еще не установлены.
+
+{EMOJIS['police']} Администраторы могут установить правила командой:
+/createpravila [текст правил]
+
+{EMOJIS['light']} Пример:
+/createpravila 1. Не спамить
+2. Уважать других участников
+3. Не размещать рекламу
+""".strip()
+        else:
+            message = f"""{EMOJIS['rules']} Правила чата:
+
+{rules_text}
+
+──────────────
+{EMOJIS['gavel']} Система наказаний:
+{EMOJIS['warning']} 1-2 предупреждения - предупреждение
+{EMOJIS['no_entry']} 3 предупреждения - автоматический бан
+{EMOJIS['police']} Администраторы могут выдавать муты и баны
+
+{EMOJIS['light']} По всем вопросам обращайтесь к администраторам.
+""".strip()
+        
+        self.send_message(chat_id, message)
+    
+    def handle_new_chat_member(self, chat_id: int, user_id: int):
+        """ФИКСИРОВАННЫЙ обработчик: приветствие новых участников"""
+        user_data = self.db.get_user(user_id, chat_id)
+        if user_data and user_data.get('kicked', 0) == 1:
+            if user_data['ban_until'] > time.time() or user_data['ban_until'] == 0:
+                try:
+                    self.vk.messages.removeChatUser(
+                        chat_id=chat_id,
+                        user_id=user_id
+                    )
+                    print(f"{EMOJIS['kick']} Забаненный пользователь {user_id} пытался вернуться в чат {chat_id}")
+                    return
+                except Exception as e:
+                    print(f"{EMOJIS['cross']} Ошибка при кике забаненного: {e}")
+        
+        self.db.add_user(user_id, chat_id)
+        
+        # ФИКС: Получаем приветствие из базы данных
+        welcome_message = self.db.get_welcome_message(chat_id)
+        user_info = self.get_user_info(user_id)
+        
+        message = f"""{EMOJIS['welcome']} Добро пожаловать!
+
+{EMOJIS['party']} Приветствуем нового участника:
+[id{user_id}|{user_info['full_name']}]
+
+{EMOJIS['bell']} {welcome_message}
+
+{EMOJIS['rules']} Обязательно ознакомьтесь с /правила
+{EMOJIS['help']} Помощь по командам: /help
+{EMOJIS['info']} Ваша статистика: /профиль
+""".strip()
+        self.send_message(chat_id, message)
     
     def handle_admin_stats(self, user_id: int, chat_id: int):
         if not self.is_chat_admin(user_id, chat_id):
@@ -620,40 +711,19 @@ class VKAvroraBot:
         self.send_message(chat_id, message)
     
     def get_chat_settings_info(self, chat_id: int) -> str:
+        """ФИКС: Информация о настройках чата"""
         settings = self.db.get_chat_settings(chat_id)
         rules_text = settings.get('rules_text', '')
-        has_rules = bool(rules_text.strip())
+        has_rules = bool(rules_text.strip()) and rules_text != 'Правила еще не установлены. Администраторы могут установить их командой /createpravila'
         
-        return f"""{EMOJIS['welcome']} Приветствие: {settings['welcome_message'][:50]}...
+        welcome_msg = settings.get('welcome_message', 'Добро пожаловать в чат!')
+        if len(welcome_msg) > 50:
+            welcome_msg = welcome_msg[:47] + "..."
+        
+        return f"""{EMOJIS['welcome']} Приветствие: {welcome_msg}
 {EMOJIS['rules']} Правила: {'✅ Установлены' if has_rules else '❌ Не установлены'}
-{EMOJIS['warning']} Макс. варнов: {settings['max_warns']}
-{EMOJIS['ban_hammer']} Длительность автобана: {settings['ban_duration']} дней"""
-    
-    def handle_create_rules(self, user_id: int, chat_id: int, args: str):
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        if not args.strip():
-            self.send_message(chat_id, f"""{EMOJIS['rules']} Использование: /createpravila [текст правил]
-
-{EMOJIS['light']} Пример:
-/createpravila 1. Не спамить
-2. Уважать других
-3. Не рекламировать""")
-            return
-        
-        self.db.set_rules(chat_id, args.strip())
-        
-        message = f"""{EMOJIS['check']} {EMOJIS['rules']} Правила чата обновлены!
-
-{EMOJIS['scroll']} Новые правила установлены.
-{EMOJIS['light']} Теперь участники могут посмотреть их командой /правила
-
-{EMOJIS['book']} Для просмотра: /правила
-{EMOJIS['pen']} Для редактирования: /createpravila [новый текст]
-""".strip()
-        self.send_message(chat_id, message)
+{EMOJIS['warning']} Макс. варнов: {settings.get('max_warns', 3)}
+{EMOJIS['ban_hammer']} Длительность автобана: {settings.get('ban_duration', 10)} дней"""
     
     def handle_mute(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
         if not self.is_chat_admin(user_id, chat_id):
@@ -682,19 +752,15 @@ class VKAvroraBot:
         duration_idx = 0
         reason_idx = 1
         
-        # Если есть ответ на сообщение
         if reply_message:
             target_id = reply_message['from_id']
-            # Проверяем, не является ли первая часть текста упоминанием
             if parts and (parts[0].startswith('@') or 'id' in parts[0] or parts[0].isdigit()):
-                # Если есть упоминание, игнорируем reply_message и берем упомянутого пользователя
                 extracted_id = self.extract_mention_or_id(parts[0], reply_message)
                 if extracted_id:
                     target_id = extracted_id
                     duration_idx = 1
                     reason_idx = 2
         else:
-            # Если нет ответа, то первая часть должна быть упоминанием
             if parts:
                 target_id = self.extract_mention_or_id(parts[0], reply_message)
                 if target_id:
@@ -739,7 +805,6 @@ class VKAvroraBot:
         self.db.add_user(target_id, chat_id)
         self.db.update_user(target_id, chat_id, mute_until=mute_until)
         
-        # Удаляем сообщение, на которое был ответ (если есть)
         if reply_message and 'conversation_message_id' in reply_message:
             try:
                 self.vk.messages.delete(
@@ -934,19 +999,15 @@ class VKAvroraBot:
         duration_idx = 0
         reason_idx = 1
         
-        # Если есть ответ на сообщение
         if reply_message:
             target_id = reply_message['from_id']
-            # Проверяем, не является ли первая часть текста упоминанием
             if parts and (parts[0].startswith('@') or 'id' in parts[0] or parts[0].isdigit()):
-                # Если есть упоминание, игнорируем reply_message и берем упомянутого пользователя
                 extracted_id = self.extract_mention_or_id(parts[0], reply_message)
                 if extracted_id:
                     target_id = extracted_id
                     duration_idx = 1
                     reason_idx = 2
         else:
-            # Если нет ответа, то первая часть должна быть упоминанием
             if parts:
                 target_id = self.extract_mention_or_id(parts[0], reply_message)
                 if target_id:
@@ -1015,26 +1076,6 @@ class VKAvroraBot:
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
 {EMOJIS['warning']} Пользователь будет автоматически кикаться при попытке вернуться в чат.
-""".strip()
-        self.send_message(chat_id, message)
-    
-    def handle_welcome(self, user_id: int, chat_id: int, args: str):
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        if not args.strip():
-            self.send_message(chat_id, f"{EMOJIS['welcome']} Использование: /приветствие [текст]\n\n{EMOJIS['light']} Пример: /приветствие Добро пожаловать в наш чат! Правила: /правила")
-            return
-        
-        self.db.update_chat_settings(chat_id, welcome_message=args.strip())
-        
-        message = f"""{EMOJIS['check']} {EMOJIS['welcome']} Приветствие обновлено!
-
-{EMOJIS['scroll']} Новое приветствие:
-{args.strip()}
-
-{EMOJIS['light']} Теперь это сообщение будет показываться новым участникам.
 """.strip()
         self.send_message(chat_id, message)
     
@@ -1115,38 +1156,6 @@ class VKAvroraBot:
             message += f"\n{EMOJIS['light']} ... и еще {len(roles) - 20} ролей"
         
         self.send_message(chat_id, message.strip())
-    
-    def handle_rules(self, user_id: int, chat_id: int):
-        rules_text = self.db.get_rules(chat_id)
-        
-        if not rules_text or not rules_text.strip():
-            message = f"""{EMOJIS['rules']} Правила чата
-
-{EMOJIS['warning']} Правила еще не установлены.
-
-{EMOJIS['police']} Администраторы могут установить правила командой:
-/createpravila [текст правил]
-
-{EMOJIS['light']} Пример:
-/createpravila 1. Не спамить
-2. Уважать других участников
-3. Не размещать рекламу
-""".strip()
-        else:
-            message = f"""{EMOJIS['rules']} Правила чата:
-
-{rules_text}
-
-──────────────
-{EMOJIS['gavel']} Система наказаний:
-{EMOJIS['warning']} 1-2 предупреждения - предупреждение
-{EMOJIS['no_entry']} 3 предупреждения - автоматический бан
-{EMOJIS['police']} Администраторы могут выдавать муты и баны
-
-{EMOJIS['light']} По всем вопросам обращайтесь к администраторам.
-""".strip()
-        
-        self.send_message(chat_id, message)
     
     def handle_unmute(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
         if not self.is_chat_admin(user_id, chat_id):
@@ -1240,25 +1249,22 @@ class VKAvroraBot:
         
         self.send_message(chat_id, message)
     
+    # ========== НОВЫЕ КОМАНДЫ ==========
+    
     def handle_info(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
         """Команда /инфо - информация о пользователе"""
         target_id = self.extract_mention_or_id(args, reply_message)
         if not target_id:
             target_id = user_id
         
-        # Получаем информацию о пользователе
         user_info = self.get_user_info(target_id)
         self.db.add_user(target_id, chat_id)
         user_data = self.db.get_user(target_id, chat_id)
-        
-        # Получаем статистику
         user_stats = self.db.get_user_stats(target_id, chat_id)
         
-        # Проверяем права
         is_admin = self.is_chat_admin(target_id, chat_id)
         db_role = self.db.get_role(target_id, chat_id)
         
-        # Определяем роль
         if db_role:
             role_text = f"{EMOJIS['crown']} {db_role}"
         elif is_admin:
@@ -1266,7 +1272,6 @@ class VKAvroraBot:
         else:
             role_text = f"{EMOJIS['user']} Участник"
         
-        # Статус пользователя
         status = []
         if user_stats.get('muted'):
             status.append(f"{EMOJIS['mute']} В муте")
@@ -1277,7 +1282,6 @@ class VKAvroraBot:
         if not status:
             status.append(f"{EMOJIS['green_circle']} Активен")
         
-        # Форматируем дату вступления
         join_date = user_stats.get('join_date', 'Неизвестно')
         if join_date and join_date != 'Неизвестно':
             try:
@@ -1286,7 +1290,6 @@ class VKAvroraBot:
             except:
                 pass
         
-        # История варнов (последние 3)
         self.db.cursor.execute(
             "SELECT reason, date, admin_id FROM warns_history WHERE user_id = ? AND chat_id = ? ORDER BY date DESC LIMIT 3",
             (target_id, chat_id)
@@ -1295,7 +1298,7 @@ class VKAvroraBot:
         
         warns_history = ""
         if recent_warns:
-            warns_history = "\n{EMOJIS['warning']} Последние предупреждения:\n"
+            warns_history = f"\n{EMOJIS['warning']} Последние предупреждения:\n"
             for reason, warn_date, admin_id in recent_warns:
                 admin_info = self.get_user_info(admin_id)
                 dt = datetime.datetime.strptime(warn_date[:19], "%Y-%m-%d %H:%M:%S")
@@ -1334,7 +1337,6 @@ class VKAvroraBot:
 {EMOJIS['chart']} Чтобы увидеть результаты, используйте /опросрезультаты""")
             return
         
-        # Парсим аргументы
         parts = args.split('|')
         if len(parts) < 3:
             self.send_message(chat_id, f"{EMOJIS['cross']} Нужно указать вопрос и минимум 2 варианта ответа, разделенные |")
@@ -1351,10 +1353,7 @@ class VKAvroraBot:
             self.send_message(chat_id, f"{EMOJIS['cross']} Максимум 10 вариантов ответа")
             return
         
-        # Создаем опрос в базе
         poll_id = self.db.create_poll(chat_id, user_id, question, options)
-        
-        # Формируем сообщение с опросом
         user_info = self.get_user_info(user_id)
         
         options_text = ""
@@ -1381,7 +1380,6 @@ class VKAvroraBot:
     def handle_poll_results(self, user_id: int, chat_id: int, args: str):
         """Команда /опросрезультаты - результаты опроса"""
         if not args.strip():
-            # Показываем активные опросы
             active_polls = self.db.get_active_polls(chat_id)
             
             if not active_polls:
@@ -1401,7 +1399,6 @@ class VKAvroraBot:
             self.send_message(chat_id, message.strip())
             return
         
-        # Показываем результаты конкретного опроса
         try:
             poll_id = int(args.strip())
         except ValueError:
@@ -1413,7 +1410,6 @@ class VKAvroraBot:
             self.send_message(chat_id, f"{EMOJIS['cross']} Опрос #{poll_id} не найден")
             return
         
-        # Формируем результаты
         question = results['question']
         options = results['options']
         vote_results = results['results']
@@ -1425,7 +1421,6 @@ class VKAvroraBot:
             votes = vote_results.get(i, 0)
             percentage = (votes / total_votes * 100) if total_votes > 0 else 0
             
-            # Создаем прогресс-бар
             bars = int(percentage / 10)
             progress_bar = "█" * bars + "░" * (10 - bars)
             
@@ -1447,39 +1442,33 @@ class VKAvroraBot:
         self.send_message(chat_id, message)
     
     def handle_poll_vote(self, user_id: int, chat_id: int, reply_message: Dict, vote_text: str):
-        """Обработка голосования в опросе (ответ на сообщение с опросом)"""
-        # Ищем опрос по ID в тексте сообщения
+        """Обработка голосования в опросе"""
         poll_match = re.search(r'Опрос #(\d+)', reply_message.get('text', ''))
         if not poll_match:
             return
         
         poll_id = int(poll_match.group(1))
         
-        # Парсим номер варианта
         try:
             option_num = int(vote_text.strip())
-            option_index = option_num - 1  # Преобразуем в 0-based индекс
+            option_index = option_num - 1
         except ValueError:
             self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Пожалуйста], укажите номер варианта (1, 2, 3...)")
             return
         
-        # Получаем опрос
         poll = self.db.get_poll(poll_id)
         if not poll or not poll['is_active']:
             self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Этот опрос уже завершен]")
             return
         
-        # Проверяем, существует ли такой вариант
         if option_index < 0 or option_index >= len(poll['options']):
             self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Неправильный номер варианта. Доступно: 1-{len(poll['options'])}]")
             return
         
-        # Голосуем
         if self.db.vote_poll(poll_id, user_id, option_index):
             user_info = self.get_user_info(user_id)
             option_text = poll['options'][option_index]
             
-            # Получаем текущие результаты для информации
             results = self.db.get_poll_results(poll_id)
             votes_for_option = results['results'].get(option_index, 0)
             total_votes = results['total_votes']
@@ -1635,40 +1624,6 @@ class VKAvroraBot:
         except Exception as e:
             self.send_message(chat_id, f"{EMOJIS['cross']} Ошибка: {str(e)}")
     
-    def handle_new_chat_member(self, chat_id: int, user_id: int):
-        user_data = self.db.get_user(user_id, chat_id)
-        if user_data and user_data.get('kicked', 0) == 1:
-            if user_data['ban_until'] > time.time() or user_data['ban_until'] == 0:
-                try:
-                    self.vk.messages.removeChatUser(
-                        chat_id=chat_id,
-                        user_id=user_id
-                    )
-                    print(f"{EMOJIS['kick']} Забаненный пользователь {user_id} пытался вернуться в чат {chat_id}")
-                    return
-                except Exception as e:
-                    print(f"{EMOJIS['cross']} Ошибка при кике забаненного: {e}")
-        
-        self.db.add_user(user_id, chat_id)
-        
-        settings = self.db.get_chat_settings(chat_id)
-        welcome_message = settings.get('welcome_message', 'Добро пожаловать в чат!')
-        
-        user_info = self.get_user_info(user_id)
-        
-        message = f"""{EMOJIS['welcome']} Добро пожаловать!
-
-{EMOJIS['party']} Приветствуем нового участника:
-[id{user_id}|{user_info['full_name']}]
-
-{EMOJIS['bell']} {welcome_message}
-
-{EMOJIS['rules']} Обязательно ознакомьтесь с /правила
-{EMOJIS['help']} Помощь по командам: /help
-{EMOJIS['info']} Ваша статистика: /профиль
-""".strip()
-        self.send_message(chat_id, message)
-    
     def check_punishments(self):
         while True:
             try:
@@ -1710,12 +1665,8 @@ class VKAvroraBot:
             
             user_data = self.db.get_user(user_id, chat_id)
             
-            # Проверка на бан
             if user_data and user_data['ban_until'] > 0:
-                if user_data['ban_until'] == 0:
-                    ban_active = True
-                else:
-                    ban_active = user_data['ban_until'] > time.time()
+                ban_active = True if user_data['ban_until'] == 0 else user_data['ban_until'] > time.time()
                 
                 if ban_active:
                     try:
@@ -1728,15 +1679,10 @@ class VKAvroraBot:
                         print(f"{EMOJIS['cross']} Ошибка при кике забаненного: {e}")
                     return
             
-            # Проверка на мут
             if user_data and user_data['mute_until'] > 0:
-                if user_data['mute_until'] == 0:
-                    mute_active = True
-                else:
-                    mute_active = user_data['mute_until'] > time.time()
+                mute_active = True if user_data['mute_until'] == 0 else user_data['mute_until'] > time.time()
                 
                 if mute_active:
-                    # Пробуем удалить сообщение
                     try:
                         msg_id = message.get('conversation_message_id')
                         if msg_id:
@@ -1820,9 +1766,7 @@ class VKAvroraBot:
                 else:
                     self.send_message(chat_id, f"{EMOJIS['cross']} Неизвестная команда. Используйте /help для списка команд.")
             
-            # Проверка, является ли сообщение ответом на опрос
             elif reply_message and reply_message.get('from_id') == -int(GROUP_ID):
-                # Если это ответ на сообщение от бота
                 reply_text = reply_message.get('text', '')
                 if 'Опрос #' in reply_text and text.strip().isdigit():
                     self.handle_poll_vote(user_id, chat_id, reply_message, text)
@@ -1840,6 +1784,7 @@ class VKAvroraBot:
         print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в каждом чате")
         print(f"{EMOJIS['gear']} База данных: avrora_bot.db")
         print(f"{EMOJIS['info']} Новые команды: /инфо, /опрос, /опросрезультаты")
+        print(f"{EMOJIS['check']} Исправлены баги с /createpravila и /приветствие")
         
         for event in self.longpoll.listen():
             try:
@@ -1868,7 +1813,6 @@ if __name__ == "__main__":
     {EMOJIS['robot']} ====================================
     """)
     
-    # Проверка прав бота
     print(f"{EMOJIS['light']} Проверяем права бота...")
     print(f"{EMOJIS['light']} Для работы мута боту нужны права:")
     print(f"{EMOJIS['check']} Управление беседой")
