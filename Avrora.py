@@ -9,6 +9,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 import threading
 import os
+import random
 
 # ========== КОНФИГУРАЦИЯ ==========
 GROUP_TOKEN = "vk1.a.o_e86tU572NCbaSCKfBUOWk8kV-Ch99M2d0B-5Hp6d4-08M3AzqmxTdw5DNhjNvapQ4Aro1U6yatm2U2AiUG_A4IogNInCEjMmK05SMyB7wxZjgDgVG7XfioPR6vmF2u0kDZZeeueUi24CapZlC8-lO65mwcOpIxg_JBiyrjzB7S96RDvxl3SE0yfDY15BjqRbGKg2qRZGHko0NsZAuZ4g"
@@ -80,7 +81,12 @@ EMOJIS = {
     "confetti": "🎊",
     "trophy": "🏆",
     "medal": "🎖️",
-    "flag": "🎌"
+    "flag": "🎌",
+    
+    # Новые для команд
+    "info": "ℹ️",
+    "poll": "📊",
+    "vote": "🗳️"
 }
 
 # ========== БАЗА ДАННЫХ ==========
@@ -142,6 +148,20 @@ class Database:
                 admin_id INTEGER,
                 reason TEXT,
                 date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Таблица опросов (новая)
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS polls (
+                poll_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                creator_id INTEGER,
+                question TEXT,
+                options TEXT,  -- JSON массив вариантов
+                votes TEXT,    -- JSON словарь {user_id: option_index}
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active INTEGER DEFAULT 1
             )
         ''')
         
@@ -244,11 +264,7 @@ class Database:
         self.conn.commit()
     
     def set_rules(self, chat_id: int, rules_text: str):
-        self.cursor.execute(
-            "UPDATE chat_settings SET rules_text = ? WHERE chat_id = ?",
-            (rules_text, chat_id)
-        )
-        self.conn.commit()
+        self.update_chat_settings(chat_id, rules_text=rules_text)
     
     def get_rules(self, chat_id: int) -> str:
         settings = self.get_chat_settings(chat_id)
@@ -323,6 +339,95 @@ class Database:
             'role': self.get_role(user_id, chat_id) or user['role'],
             'join_date': user['join_date']
         }
+    
+    # Методы для опросов (новые)
+    def create_poll(self, chat_id: int, creator_id: int, question: str, options: List[str]) -> int:
+        options_json = json.dumps(options, ensure_ascii=False)
+        votes_json = json.dumps({}, ensure_ascii=False)
+        
+        self.cursor.execute(
+            "INSERT INTO polls (chat_id, creator_id, question, options, votes) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, creator_id, question, options_json, votes_json)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+    
+    def get_poll(self, poll_id: int) -> Optional[Dict]:
+        self.cursor.execute(
+            "SELECT * FROM polls WHERE poll_id = ?",
+            (poll_id,)
+        )
+        row = self.cursor.fetchone()
+        if row:
+            columns = [desc[0] for desc in self.cursor.description]
+            result = dict(zip(columns, row))
+            # Декодируем JSON поля
+            result['options'] = json.loads(result['options'])
+            result['votes'] = json.loads(result['votes'])
+            return result
+        return None
+    
+    def vote_poll(self, poll_id: int, user_id: int, option_index: int) -> bool:
+        poll = self.get_poll(poll_id)
+        if not poll or not poll['is_active']:
+            return False
+        
+        votes = poll['votes']
+        # Если пользователь уже голосовал, удаляем старый голос
+        if str(user_id) in votes:
+            del votes[str(user_id)]
+        
+        # Добавляем новый голос
+        votes[str(user_id)] = option_index
+        
+        # Сохраняем обратно в базу
+        votes_json = json.dumps(votes, ensure_ascii=False)
+        self.cursor.execute(
+            "UPDATE polls SET votes = ? WHERE poll_id = ?",
+            (votes_json, poll_id)
+        )
+        self.conn.commit()
+        return True
+    
+    def get_poll_results(self, poll_id: int) -> Dict:
+        poll = self.get_poll(poll_id)
+        if not poll:
+            return {}
+        
+        votes = poll['votes']
+        options = poll['options']
+        
+        # Подсчитываем голоса для каждого варианта
+        results = {i: 0 for i in range(len(options))}
+        for vote in votes.values():
+            if vote in results:
+                results[vote] += 1
+        
+        total_votes = sum(results.values())
+        
+        return {
+            'question': poll['question'],
+            'options': options,
+            'results': results,
+            'total_votes': total_votes,
+            'creator_id': poll['creator_id'],
+            'created_at': poll['created_at']
+        }
+    
+    def close_poll(self, poll_id: int):
+        self.cursor.execute(
+            "UPDATE polls SET is_active = 0 WHERE poll_id = ?",
+            (poll_id,)
+        )
+        self.conn.commit()
+    
+    def get_active_polls(self, chat_id: int) -> List[Dict]:
+        self.cursor.execute(
+            "SELECT poll_id, question, creator_id FROM polls WHERE chat_id = ? AND is_active = 1 ORDER BY created_at DESC",
+            (chat_id,)
+        )
+        rows = self.cursor.fetchall()
+        return [{'poll_id': row[0], 'question': row[1], 'creator_id': row[2]} for row in rows]
 
 # ========== ВК БОТ ==========
 class VKAvroraBot:
@@ -335,6 +440,9 @@ class VKAvroraBot:
         # Кэш админов чата
         self.chat_admins_cache = {}
         self.cache_timeout = 300
+        
+        # Активные опросы
+        self.active_polls = {}
         
         print(f"{EMOJIS['robot']} AVRORA Manager Bot запущен!")
         print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в чате")
@@ -1132,6 +1240,264 @@ class VKAvroraBot:
         
         self.send_message(chat_id, message)
     
+    def handle_info(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
+        """Команда /инфо - информация о пользователе"""
+        target_id = self.extract_mention_or_id(args, reply_message)
+        if not target_id:
+            target_id = user_id
+        
+        # Получаем информацию о пользователе
+        user_info = self.get_user_info(target_id)
+        self.db.add_user(target_id, chat_id)
+        user_data = self.db.get_user(target_id, chat_id)
+        
+        # Получаем статистику
+        user_stats = self.db.get_user_stats(target_id, chat_id)
+        
+        # Проверяем права
+        is_admin = self.is_chat_admin(target_id, chat_id)
+        db_role = self.db.get_role(target_id, chat_id)
+        
+        # Определяем роль
+        if db_role:
+            role_text = f"{EMOJIS['crown']} {db_role}"
+        elif is_admin:
+            role_text = f"{EMOJIS['crown']} Администратор"
+        else:
+            role_text = f"{EMOJIS['user']} Участник"
+        
+        # Статус пользователя
+        status = []
+        if user_stats.get('muted'):
+            status.append(f"{EMOJIS['mute']} В муте")
+        if user_stats.get('banned'):
+            status.append(f"{EMOJIS['no_entry']} Забанен")
+        if user_stats.get('kicked'):
+            status.append(f"{EMOJIS['kick']} Кикнут")
+        if not status:
+            status.append(f"{EMOJIS['green_circle']} Активен")
+        
+        # Форматируем дату вступления
+        join_date = user_stats.get('join_date', 'Неизвестно')
+        if join_date and join_date != 'Неизвестно':
+            try:
+                dt = datetime.datetime.strptime(join_date[:19], "%Y-%m-%d %H:%M:%S")
+                join_date = dt.strftime("%d.%m.%Y в %H:%M")
+            except:
+                pass
+        
+        # История варнов (последние 3)
+        self.db.cursor.execute(
+            "SELECT reason, date, admin_id FROM warns_history WHERE user_id = ? AND chat_id = ? ORDER BY date DESC LIMIT 3",
+            (target_id, chat_id)
+        )
+        recent_warns = self.db.cursor.fetchall()
+        
+        warns_history = ""
+        if recent_warns:
+            warns_history = "\n{EMOJIS['warning']} Последние предупреждения:\n"
+            for reason, warn_date, admin_id in recent_warns:
+                admin_info = self.get_user_info(admin_id)
+                dt = datetime.datetime.strptime(warn_date[:19], "%Y-%m-%d %H:%M:%S")
+                formatted_date = dt.strftime("%d.%m.%Y")
+                warns_history += f"  • {reason} ({formatted_date}, от [id{admin_id}|{admin_info['first_name']}])\n"
+        
+        message = f"""{EMOJIS['info']} Информация о пользователе
+
+{EMOJIS['user']} Основная информация:
+{EMOJIS['light']} Имя: {user_info['full_name']}
+{EMOJIS['light']} ID: {target_id}
+{EMOJIS['role']} Роль: {role_text}
+{EMOJIS['star']} Статус: {', '.join(status)}
+
+{EMOJIS['chart']} Статистика:
+{EMOJIS['warning']} Активные предупреждения: {user_stats.get('warns', 0)}
+{EMOJIS['chart']} Всего предупреждений: {user_stats.get('total_warns', 0)}
+{EMOJIS['calendar']} В чате с: {join_date}
+{warns_history}
+
+{EMOJIS['light']} ID можно использовать для команд: /warn @id{target_id} причина
+""".strip()
+        
+        self.send_message(chat_id, message)
+    
+    def handle_poll(self, user_id: int, chat_id: int, args: str):
+        """Команда /опрос - создание опроса"""
+        if not args.strip():
+            self.send_message(chat_id, f"""{EMOJIS['poll']} Использование: /опрос [вопрос] | [вариант1] | [вариант2] | ...
+            
+{EMOJIS['light']} Примеры:
+/опрос Какой день лучше для встречи? | Понедельник | Вторник | Среда
+/опрос Любимый цвет? | Красный | Синий | Зеленый | Желтый
+
+{EMOJIS['vote']} После создания опроса участники могут голосовать, отвечая на сообщение с номером варианта (1, 2, 3...)
+{EMOJIS['chart']} Чтобы увидеть результаты, используйте /опросрезультаты""")
+            return
+        
+        # Парсим аргументы
+        parts = args.split('|')
+        if len(parts) < 3:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Нужно указать вопрос и минимум 2 варианта ответа, разделенные |")
+            return
+        
+        question = parts[0].strip()
+        options = [opt.strip() for opt in parts[1:] if opt.strip()]
+        
+        if len(options) < 2:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Нужно минимум 2 варианта ответа")
+            return
+        
+        if len(options) > 10:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Максимум 10 вариантов ответа")
+            return
+        
+        # Создаем опрос в базе
+        poll_id = self.db.create_poll(chat_id, user_id, question, options)
+        
+        # Формируем сообщение с опросом
+        user_info = self.get_user_info(user_id)
+        
+        options_text = ""
+        for i, option in enumerate(options, 1):
+            options_text += f"{i}. {option}\n"
+        
+        message = f"""{EMOJIS['poll']} Новый опрос #{poll_id}
+
+{EMOJIS['light']} Вопрос: {question}
+
+{EMOJIS['vote']} Варианты ответов:
+{options_text}
+{EMOJIS['user']} Создал: [id{user_id}|{user_info['full_name']}]
+
+{EMOJIS['light']} Как голосовать:
+1. Ответьте на это сообщение
+2. Напишите номер выбранного варианта (1, 2, 3...)
+
+{EMOJIS['chart']} Чтобы посмотреть результаты: /опросрезультаты {poll_id}
+""".strip()
+        
+        self.send_message(chat_id, message)
+    
+    def handle_poll_results(self, user_id: int, chat_id: int, args: str):
+        """Команда /опросрезультаты - результаты опроса"""
+        if not args.strip():
+            # Показываем активные опросы
+            active_polls = self.db.get_active_polls(chat_id)
+            
+            if not active_polls:
+                self.send_message(chat_id, f"{EMOJIS['poll']} В этом чате нет активных опросов.\n{EMOJIS['light']} Создайте опрос командой: /опрос вопрос | вариант1 | вариант2")
+                return
+            
+            message = f"{EMOJIS['poll']} Активные опросы:\n\n"
+            for poll in active_polls[:5]:
+                creator_info = self.get_user_info(poll['creator_id'])
+                message += f"{EMOJIS['vote']} Опрос #{poll['poll_id']}: {poll['question'][:50]}...\n"
+                message += f"   Создал: [id{poll['creator_id']}|{creator_info['first_name']}]\n"
+                message += f"   /опросрезультаты {poll['poll_id']}\n\n"
+            
+            if len(active_polls) > 5:
+                message += f"{EMOJIS['light']} ... и еще {len(active_polls) - 5} опросов"
+            
+            self.send_message(chat_id, message.strip())
+            return
+        
+        # Показываем результаты конкретного опроса
+        try:
+            poll_id = int(args.strip())
+        except ValueError:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Укажите номер опроса. Например: /опросрезультаты 1")
+            return
+        
+        results = self.db.get_poll_results(poll_id)
+        if not results:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Опрос #{poll_id} не найден")
+            return
+        
+        # Формируем результаты
+        question = results['question']
+        options = results['options']
+        vote_results = results['results']
+        total_votes = results['total_votes']
+        creator_info = self.get_user_info(results['creator_id'])
+        
+        results_text = ""
+        for i, option in enumerate(options):
+            votes = vote_results.get(i, 0)
+            percentage = (votes / total_votes * 100) if total_votes > 0 else 0
+            
+            # Создаем прогресс-бар
+            bars = int(percentage / 10)
+            progress_bar = "█" * bars + "░" * (10 - bars)
+            
+            results_text += f"{i+1}. {option}\n"
+            results_text += f"   {progress_bar} {votes} голосов ({percentage:.1f}%)\n\n"
+        
+        message = f"""{EMOJIS['poll']} Результаты опроса #{poll_id}
+
+{EMOJIS['light']} Вопрос: {question}
+
+{EMOJIS['chart']} Результаты:
+{results_text}
+{EMOJIS['vote']} Всего голосов: {total_votes}
+{EMOJIS['user']} Создал: [id{results['creator_id']}|{creator_info['full_name']}]
+
+{EMOJIS['clock']} Создан: {results['created_at'][:19]}
+""".strip()
+        
+        self.send_message(chat_id, message)
+    
+    def handle_poll_vote(self, user_id: int, chat_id: int, reply_message: Dict, vote_text: str):
+        """Обработка голосования в опросе (ответ на сообщение с опросом)"""
+        # Ищем опрос по ID в тексте сообщения
+        poll_match = re.search(r'Опрос #(\d+)', reply_message.get('text', ''))
+        if not poll_match:
+            return
+        
+        poll_id = int(poll_match.group(1))
+        
+        # Парсим номер варианта
+        try:
+            option_num = int(vote_text.strip())
+            option_index = option_num - 1  # Преобразуем в 0-based индекс
+        except ValueError:
+            self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Пожалуйста], укажите номер варианта (1, 2, 3...)")
+            return
+        
+        # Получаем опрос
+        poll = self.db.get_poll(poll_id)
+        if not poll or not poll['is_active']:
+            self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Этот опрос уже завершен]")
+            return
+        
+        # Проверяем, существует ли такой вариант
+        if option_index < 0 or option_index >= len(poll['options']):
+            self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Неправильный номер варианта. Доступно: 1-{len(poll['options'])}]")
+            return
+        
+        # Голосуем
+        if self.db.vote_poll(poll_id, user_id, option_index):
+            user_info = self.get_user_info(user_id)
+            option_text = poll['options'][option_index]
+            
+            # Получаем текущие результаты для информации
+            results = self.db.get_poll_results(poll_id)
+            votes_for_option = results['results'].get(option_index, 0)
+            total_votes = results['total_votes']
+            percentage = (votes_for_option / total_votes * 100) if total_votes > 0 else 0
+            
+            message = f"""{EMOJIS['check']} [id{user_id}|{user_info['first_name']}], ваш голос учтен!
+
+{EMOJIS['vote']} Вы выбрали: {option_text}
+{EMOJIS['chart']} За этот вариант: {votes_for_option} голосов ({percentage:.1f}%)
+{EMOJIS['light']} Всего голосов в опросе: {total_votes}
+
+{EMOJIS['poll']} Чтобы посмотреть все результаты: /опросрезультаты {poll_id}
+""".strip()
+            
+            self.send_message(chat_id, message)
+        else:
+            self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Не удалось зарегистрировать ваш голос]")
+    
     def handle_help(self, user_id: int, chat_id: int):
         is_admin = self.is_chat_admin(user_id, chat_id)
         
@@ -1152,6 +1518,9 @@ class VKAvroraBot:
 {EMOJIS['check']} /снятьварн [@avroramanager или ответ] - Снять предупреждение
 
 {EMOJIS['user']} Команды для всех участников:
+{EMOJIS['info']} /инфо [@пользователь] - Информация о пользователе
+{EMOJIS['poll']} /опрос вопрос | вар1 | вар2 | ... - Создать опрос
+{EMOJIS['chart']} /опросрезультаты [номер] - Результаты опроса
 {EMOJIS['help']} /help - Эта справка
 {EMOJIS['exit']} /q - Выйти из чата
 {EMOJIS['role']} /niclist - Список ролей
@@ -1173,6 +1542,9 @@ class VKAvroraBot:
             message = f"""{EMOJIS['robot']} Avrora Chat Manager - Помощь
 
 {EMOJIS['user']} Доступные команды:
+{EMOJIS['info']} /инфо [@пользователь] - Информация о пользователе
+{EMOJIS['poll']} /опрос вопрос | вар1 | вар2 | ... - Создать опрос (если разрешено)
+{EMOJIS['chart']} /опросрезультаты [номер] - Результаты опроса
 {EMOJIS['help']} /help - Эта справка
 {EMOJIS['exit']} /q - Выйти из чата
 {EMOJIS['role']} /niclist - Список ролей
@@ -1228,6 +1600,7 @@ class VKAvroraBot:
 {EMOJIS['calendar']} В чате с: {join_date}
 {EMOJIS['star']} Статус: {status}
 
+{EMOJIS['info']} Подробная информация: /инфо
 {EMOJIS['light']} Чтобы увидеть все команды, напишите /help
 """.strip()
         self.send_message(chat_id, message)
@@ -1292,6 +1665,7 @@ class VKAvroraBot:
 
 {EMOJIS['rules']} Обязательно ознакомьтесь с /правила
 {EMOJIS['help']} Помощь по командам: /help
+{EMOJIS['info']} Ваша статистика: /профиль
 """.strip()
         self.send_message(chat_id, message)
     
@@ -1425,6 +1799,15 @@ class VKAvroraBot:
                 elif command in ['/снятьварн', '/unwarn', '/снятьпред']:
                     self.handle_unwarn(user_id, chat_id, args, reply_message)
                 
+                elif command == '/инфо':
+                    self.handle_info(user_id, chat_id, args, reply_message)
+                
+                elif command in ['/опрос', '/poll', '/голосование']:
+                    self.handle_poll(user_id, chat_id, args)
+                
+                elif command in ['/опросрезультаты', '/pollresults', '/результаты']:
+                    self.handle_poll_results(user_id, chat_id, args)
+                
                 elif command == '/help':
                     self.handle_help(user_id, chat_id)
                 
@@ -1436,6 +1819,13 @@ class VKAvroraBot:
                 
                 else:
                     self.send_message(chat_id, f"{EMOJIS['cross']} Неизвестная команда. Используйте /help для списка команд.")
+            
+            # Проверка, является ли сообщение ответом на опрос
+            elif reply_message and reply_message.get('from_id') == -int(GROUP_ID):
+                # Если это ответ на сообщение от бота
+                reply_text = reply_message.get('text', '')
+                if 'Опрос #' in reply_text and text.strip().isdigit():
+                    self.handle_poll_vote(user_id, chat_id, reply_message, text)
             
             self.db.add_user(user_id, chat_id)
             
@@ -1449,6 +1839,7 @@ class VKAvroraBot:
         print(f"{EMOJIS['robot']} Бот запущен и слушает сообщения...")
         print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в каждом чате")
         print(f"{EMOJIS['gear']} База данных: avrora_bot.db")
+        print(f"{EMOJIS['info']} Новые команды: /инфо, /опрос, /опросрезультаты")
         
         for event in self.longpoll.listen():
             try:
