@@ -1966,7 +1966,9 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             print(f"\n{EMOJIS['exit']} Стоп")
         except Exception as e:
-            print(f"\n{EMOJIS['cross']} Критическая ошибка: {e}")class Database:
+            print(f"\n{EMOJIS['cross']} Критическая ошибка: {e}")
+            
+            class Database:
     def __init__(self):
         if os.path.exists('avrora_bot.db'):
             print(f"{EMOJIS['gear']} Загружаем существующую базу данных...")
