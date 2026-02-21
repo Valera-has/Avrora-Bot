@@ -9715,7 +9715,9 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             print(f"\n{EMOJIS['exit']} Бот остановлен пользователем")
         except Exception as e:
-            print(f"\n{EMOJIS['cross']} Критическая ошибка: {e}")    def __init__(self):
+            print(f"\n{EMOJIS['cross']} Критическая ошибка: {e}")    
+            
+    def __init__(self):
         if os.path.exists('avrora_bot.db'):
             # Не удаляем базу при каждом запуске
             print(f"{EMOJIS['gear']} Загружаем существующую базу данных...")
