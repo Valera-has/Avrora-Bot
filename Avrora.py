@@ -6,7 +6,7 @@ import datetime
 import time
 import json
 import re
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 import threading
 import os
 import random
@@ -29,21 +29,19 @@ EMOJIS = {
     "blue_circle": "🔵", "purple_circle": "🟣", "thinking": "🤔", "cool": "😎",
     "smile": "😊", "sad": "😢", "angry": "😠", "party": "🎉", "confetti": "🎊",
     "trophy": "🏆", "medal": "🎖️", "flag": "🎌", "info": "ℹ️", "poll": "📊",
-    "vote": "🗳️", "search": "🔍", "message": "💬", "users": "👥", "stats": "📈",
-    "up": "⬆️", "down": "⬇️", "level": "📊", "priority": "⚡", "list": "📋",
-    "cmd": "⌨️", "admin_cmd": "👑", "user_cmd": "👤"
+    "vote": "🗳️", "search": "🔍", "message": "💬", "users": "👥", "stats": "📈"
 }
 
 # ========== БАЗА ДАННЫХ ==========
 class Database:
     def __init__(self):
         if os.path.exists('avrora_bot.db'):
+            # Не удаляем базу при каждом запуске
             print(f"{EMOJIS['gear']} Загружаем существующую базу данных...")
         
         self.conn = sqlite3.connect('avrora_bot.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.create_tables()
-        self.init_default_roles()
     
     def create_tables(self):
         # Таблица пользователей
@@ -62,7 +60,7 @@ class Database:
             )
         ''')
         
-        # Таблица настроек чата
+        # Таблица настроек чата - ФИКС: добавим недостающие колонки
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS chat_settings (
                 chat_id INTEGER PRIMARY KEY,
@@ -70,33 +68,17 @@ class Database:
                 rules_text TEXT DEFAULT 'Правила еще не установлены. Администраторы могут установить их командой /createpravila',
                 max_warns INTEGER DEFAULT 3,
                 ban_duration INTEGER DEFAULT 10,
-                bot_added_message_sent INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Таблица ролей (кастомные роли для чата)
+        # Таблица ролей
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS custom_roles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                role_name TEXT,
-                priority INTEGER DEFAULT 0,
-                created_by INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(chat_id, role_name)
-            )
-        ''')
-        
-        # Таблица назначенных ролей пользователям
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_roles (
+            CREATE TABLE IF NOT EXISTS roles (
                 user_id INTEGER,
                 chat_id INTEGER,
                 role_name TEXT,
-                assigned_by INTEGER,
-                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, chat_id, role_name)
+                PRIMARY KEY (user_id, chat_id)
             )
         ''')
         
@@ -126,190 +108,12 @@ class Database:
             )
         ''')
         
+        # Создаем начальные настройки для чатов, если их нет
+        self.cursor.execute("SELECT chat_id FROM chat_settings")
+        existing_chats = self.cursor.fetchall()
+        
         self.conn.commit()
         print(f"{EMOJIS['check']} База данных инициализирована")
-    
-    def init_default_roles(self):
-        """Инициализация стандартных ролей"""
-        self.default_roles = {
-            'Генеральный Директор': 100,
-            'Директор': 98,
-            'Заместитель Директора': 97,
-            'Администратор Бота': 95,
-            'Управляющий': 85,
-            'Заместитель Управляющего': 83,
-            'Наставник': 81,
-            'Руководитель Отдела': 80,
-            'Администратор': 60,
-            'Модератор': 40,
-            'Куратор Практикантов': 30,
-            'FD SPONSOR': 20,
-            'SPONSOR': 19,
-            'Дизайнер': 10,
-            'Агент': 0
-        }
-    
-    # ========== МЕТОДЫ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
-    
-    def create_custom_role(self, chat_id: int, role_name: str, priority: int, created_by: int) -> bool:
-        """Создание новой кастомной роли в чате"""
-        try:
-            self.cursor.execute(
-                "SELECT id FROM custom_roles WHERE chat_id = ? AND role_name = ?",
-                (chat_id, role_name)
-            )
-            if self.cursor.fetchone():
-                return False
-            
-            self.cursor.execute(
-                "INSERT INTO custom_roles (chat_id, role_name, priority, created_by) VALUES (?, ?, ?, ?)",
-                (chat_id, role_name, priority, created_by)
-            )
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"{EMOJIS['cross']} Ошибка создания роли: {e}")
-            return False
-    
-    def delete_custom_role(self, chat_id: int, role_name: str) -> bool:
-        """Удаление кастомной роли"""
-        try:
-            self.cursor.execute(
-                "DELETE FROM custom_roles WHERE chat_id = ? AND role_name = ?",
-                (chat_id, role_name)
-            )
-            
-            self.cursor.execute(
-                "DELETE FROM user_roles WHERE chat_id = ? AND role_name = ?",
-                (chat_id, role_name)
-            )
-            
-            self.conn.commit()
-            return self.cursor.rowcount > 0
-        except Exception as e:
-            print(f"{EMOJIS['cross']} Ошибка удаления роли: {e}")
-            return False
-    
-    def update_custom_role(self, chat_id: int, old_name: str, new_name: str, new_priority: int) -> bool:
-        """Обновление кастомной роли"""
-        try:
-            self.cursor.execute(
-                "UPDATE custom_roles SET role_name = ?, priority = ? WHERE chat_id = ? AND role_name = ?",
-                (new_name, new_priority, chat_id, old_name)
-            )
-            
-            self.cursor.execute(
-                "UPDATE user_roles SET role_name = ? WHERE chat_id = ? AND role_name = ?",
-                (new_name, chat_id, old_name)
-            )
-            
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"{EMOJIS['cross']} Ошибка обновления роли: {e}")
-            return False
-    
-    def get_all_roles_with_priority(self, chat_id: int) -> Dict[str, int]:
-        """Получение всех ролей чата (стандартные + кастомные) с приоритетами"""
-        roles = self.default_roles.copy()
-        
-        self.cursor.execute(
-            "SELECT role_name, priority FROM custom_roles WHERE chat_id = ?",
-            (chat_id,)
-        )
-        custom_roles = self.cursor.fetchall()
-        for role_name, priority in custom_roles:
-            roles[role_name] = priority
-        
-        sorted_roles = dict(sorted(roles.items(), key=lambda x: x[1], reverse=True))
-        return sorted_roles
-    
-    def assign_role_to_user(self, user_id: int, chat_id: int, role_name: str, assigned_by: int) -> bool:
-        """Назначение роли пользователю"""
-        try:
-            all_roles = self.get_all_roles_with_priority(chat_id)
-            if role_name not in all_roles:
-                return False
-            
-            self.cursor.execute(
-                "DELETE FROM user_roles WHERE user_id = ? AND chat_id = ?",
-                (user_id, chat_id)
-            )
-            
-            self.cursor.execute(
-                "INSERT INTO user_roles (user_id, chat_id, role_name, assigned_by) VALUES (?, ?, ?, ?)",
-                (user_id, chat_id, role_name, assigned_by)
-            )
-            
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"{EMOJIS['cross']} Ошибка назначения роли: {e}")
-            return False
-    
-    def remove_user_role(self, user_id: int, chat_id: int) -> bool:
-        """Снятие роли с пользователя"""
-        try:
-            self.cursor.execute(
-                "DELETE FROM user_roles WHERE user_id = ? AND chat_id = ?",
-                (user_id, chat_id)
-            )
-            self.conn.commit()
-            return self.cursor.rowcount > 0
-        except Exception as e:
-            print(f"{EMOJIS['cross']} Ошибка снятия роли: {e}")
-            return False
-    
-    def get_user_role(self, user_id: int, chat_id: int) -> Optional[Tuple[str, int]]:
-        """Получение роли пользователя и её приоритета"""
-        self.cursor.execute(
-            "SELECT role_name FROM user_roles WHERE user_id = ? AND chat_id = ?",
-            (user_id, chat_id)
-        )
-        result = self.cursor.fetchone()
-        
-        if result:
-            role_name = result[0]
-            all_roles = self.get_all_roles_with_priority(chat_id)
-            priority = all_roles.get(role_name, 0)
-            return (role_name, priority)
-        
-        return None
-    
-    def get_all_user_roles(self, chat_id: int) -> List[Tuple[int, str, int]]:
-        """Получение всех пользователей с ролями в чате"""
-        self.cursor.execute(
-            "SELECT user_id, role_name FROM user_roles WHERE chat_id = ?",
-            (chat_id,)
-        )
-        results = self.cursor.fetchall()
-        
-        all_roles = self.get_all_roles_with_priority(chat_id)
-        user_roles = []
-        for user_id, role_name in results:
-            priority = all_roles.get(role_name, 0)
-            user_roles.append((user_id, role_name, priority))
-        
-        user_roles.sort(key=lambda x: x[2], reverse=True)
-        return user_roles
-    
-    def get_user_priority(self, user_id: int, chat_id: int, is_admin: bool = False) -> int:
-        """Получение приоритета пользователя"""
-        if is_admin:
-            return 90
-        
-        user_role = self.get_user_role(user_id, chat_id)
-        if user_role:
-            return user_role[1]
-        
-        return 0
-    
-    def can_manage_role(self, admin_id: int, target_priority: int, chat_id: int, is_admin: bool = False) -> bool:
-        """Проверка, может ли администратор управлять ролью с указанным приоритетом"""
-        admin_priority = self.get_user_priority(admin_id, chat_id, is_admin)
-        return admin_priority > target_priority
-    
-    # ========== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==========
     
     def get_user(self, user_id: int, chat_id: int) -> Optional[Dict]:
         self.cursor.execute(
@@ -385,6 +189,7 @@ class Database:
         if row:
             columns = [desc[0] for desc in self.cursor.description]
             settings = dict(zip(columns, row))
+            # Проверяем, есть ли все необходимые поля
             if 'welcome_message' not in settings:
                 settings['welcome_message'] = 'Добро пожаловать в чат!'
             if 'rules_text' not in settings:
@@ -393,33 +198,31 @@ class Database:
                 settings['max_warns'] = 3
             if 'ban_duration' not in settings:
                 settings['ban_duration'] = 10
-            if 'bot_added_message_sent' not in settings:
-                settings['bot_added_message_sent'] = 0
             return settings
         
+        # Создаем настройки по умолчанию, если их нет
         default_settings = {
             'chat_id': chat_id,
             'welcome_message': 'Добро пожаловать в чат!',
             'rules_text': 'Правила еще не установлены. Администраторы могут установить их командой /createpravila',
             'max_warns': 3,
-            'ban_duration': 10,
-            'bot_added_message_sent': 0
+            'ban_duration': 10
         }
         
         self.cursor.execute(
-            "INSERT INTO chat_settings (chat_id, welcome_message, rules_text, max_warns, ban_duration, bot_added_message_sent) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO chat_settings (chat_id, welcome_message, rules_text, max_warns, ban_duration) VALUES (?, ?, ?, ?, ?)",
             (chat_id, 
              default_settings['welcome_message'],
              default_settings['rules_text'],
              default_settings['max_warns'],
-             default_settings['ban_duration'],
-             default_settings['bot_added_message_sent'])
+             default_settings['ban_duration'])
         )
         self.conn.commit()
         
         return self.get_chat_settings(chat_id)
     
     def update_chat_settings(self, chat_id: int, **kwargs):
+        # Сначала убедимся, что настройки существуют
         self.get_chat_settings(chat_id)
         
         set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
@@ -433,25 +236,48 @@ class Database:
         return True
     
     def set_rules(self, chat_id: int, rules_text: str):
+        """ФИКС: Правильно сохраняет правила"""
         return self.update_chat_settings(chat_id, rules_text=rules_text)
     
     def get_rules(self, chat_id: int) -> str:
+        """ФИКС: Получает правила из настроек"""
         settings = self.get_chat_settings(chat_id)
         if settings and 'rules_text' in settings:
             return settings['rules_text']
         return 'Правила еще не установлены. Администраторы могут установить их командой /createpravila'
     
     def set_welcome_message(self, chat_id: int, welcome_message: str):
+        """ФИКС: Сохраняет приветственное сообщение"""
         return self.update_chat_settings(chat_id, welcome_message=welcome_message)
     
     def get_welcome_message(self, chat_id: int) -> str:
+        """ФИКС: Получает приветственное сообщение"""
         settings = self.get_chat_settings(chat_id)
         if settings and 'welcome_message' in settings:
             return settings['welcome_message']
         return 'Добро пожаловать в чат!'
     
-    def set_bot_added_message_sent(self, chat_id: int, sent: int = 1):
-        return self.update_chat_settings(chat_id, bot_added_message_sent=sent)
+    def set_role(self, user_id: int, chat_id: int, role_name: str):
+        self.cursor.execute(
+            "INSERT OR REPLACE INTO roles (user_id, chat_id, role_name) VALUES (?, ?, ?)",
+            (user_id, chat_id, role_name)
+        )
+        self.conn.commit()
+    
+    def get_role(self, user_id: int, chat_id: int) -> Optional[str]:
+        self.cursor.execute(
+            "SELECT role_name FROM roles WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id)
+        )
+        row = self.cursor.fetchone()
+        return row[0] if row else None
+    
+    def get_all_roles(self, chat_id: int) -> List[Tuple]:
+        self.cursor.execute(
+            "SELECT user_id, role_name FROM roles WHERE chat_id = ?",
+            (chat_id,)
+        )
+        return self.cursor.fetchall()
     
     def get_chat_stats(self, chat_id: int) -> Dict:
         self.cursor.execute(
@@ -488,9 +314,6 @@ class Database:
         )
         total_warns = self.cursor.fetchone()[0]
         
-        user_role = self.get_user_role(user_id, chat_id)
-        role_name = user_role[0] if user_role else 'member'
-        
         return {
             'user_id': user_id,
             'warns': user['warns'],
@@ -498,7 +321,7 @@ class Database:
             'muted': user['mute_until'] > time.time(),
             'banned': user['ban_until'] > time.time(),
             'kicked': user.get('kicked', 0),
-            'role': role_name,
+            'role': self.get_role(user_id, chat_id) or user['role'],
             'join_date': user['join_date']
         }
     
@@ -589,12 +412,9 @@ class VKAvroraBot:
         
         self.chat_admins_cache = {}
         self.cache_timeout = 300
-        self.processed_events = set()
         
         print(f"{EMOJIS['robot']} AVRORA Manager Bot запущен!")
         print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в чате")
-        print(f"{EMOJIS['role']} Новая система ролей с приоритетами активна!")
-        print(f"{EMOJIS['cmd']} Команда /CMD - список всех команд")
     
     def send_message(self, chat_id: int, message: str, **kwargs):
         try:
@@ -725,348 +545,10 @@ class VKAvroraBot:
         dt = datetime.datetime.fromtimestamp(timestamp)
         return dt.strftime("%d.%m.%Y %H:%M")
     
-    # ========== КОМАНДЫ ДЛЯ РОЛЕЙ ==========
-    
-    def handle_new_role(self, user_id: int, chat_id: int, args: str):
-        """Команда /newrole [приоритет] [название]"""
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        parts = args.strip().split(maxsplit=1)
-        if len(parts) < 2:
-            self.send_message(chat_id, f"""{EMOJIS['role']} Использование: /newrole [приоритет] [название]
-
-{EMOJIS['priority']} Приоритет: 0 (низший) - 100 (высший)
-
-{EMOJIS['light']} Примеры:
-/newrole 50 Менеджер
-/newrole 25 Помощник
-/newrole 75 Старший Модератор""")
-            return
-        
-        try:
-            priority = int(parts[0])
-            if priority < 0 or priority > 100:
-                self.send_message(chat_id, f"{EMOJIS['cross']} Приоритет должен быть от 0 до 100!")
-                return
-            
-            role_name = parts[1].strip()
-            if len(role_name) > 50:
-                self.send_message(chat_id, f"{EMOJIS['cross']} Название роли слишком длинное (макс. 50 символов)")
-                return
-            
-            if self.db.create_custom_role(chat_id, role_name, priority, user_id):
-                admin_info = self.get_user_info(user_id)
-                message = f"""{EMOJIS['check']} Роль успешно создана!
-
-{EMOJIS['role']} Название: {role_name}
-{EMOJIS['priority']} Приоритет: {priority}
-{EMOJIS['police']} Создал: [id{user_id}|{admin_info['full_name']}]
-
-{EMOJIS['light']} Теперь вы можете назначать эту роль:
-/setrole @user {role_name}
-
-{EMOJIS['list']} Посмотреть все роли: /roles""".strip()
-                self.send_message(chat_id, message)
-            else:
-                self.send_message(chat_id, f"{EMOJIS['cross']} Роль с таким названием уже существует!")
-                
-        except ValueError:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Приоритет должен быть числом!")
-    
-    def handle_delete_role(self, user_id: int, chat_id: int, args: str):
-        """Команда /deleterole [название]"""
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        role_name = args.strip()
-        if not role_name:
-            self.send_message(chat_id, f"{EMOJIS['role']} Использование: /deleterole [название]\n\n{EMOJIS['light']} Пример: /deleterole Менеджер")
-            return
-        
-        if self.db.delete_custom_role(chat_id, role_name):
-            admin_info = self.get_user_info(user_id)
-            message = f"""{EMOJIS['check']} Роль удалена!
-
-{EMOJIS['role']} Название: {role_name}
-{EMOJIS['police']} Удалил: [id{user_id}|{admin_info['full_name']}]
-
-{EMOJIS['warning']} Все пользователи лишились этой роли.""".strip()
-            self.send_message(chat_id, message)
-        else:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Роль '{role_name}' не найдена!")
-    
-    def handle_update_role(self, user_id: int, chat_id: int, args: str):
-        """Команда /updaterole [старое название] [новый приоритет] [новое название]"""
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        # Пытаемся распарсить: сначала ищем 3 части
-        parts = args.strip().split(maxsplit=2)
-        if len(parts) < 3:
-            self.send_message(chat_id, f"""{EMOJIS['role']} Использование: /updaterole [старое название] [новый приоритет] [новое название]
-
-{EMOJIS['light']} Пример: /updaterole Менеджер 55 Старший Менеджер""")
-            return
-        
-        old_name = parts[0].strip()
-        
-        try:
-            new_priority = int(parts[1])
-            if new_priority < 0 or new_priority > 100:
-                self.send_message(chat_id, f"{EMOJIS['cross']} Приоритет должен быть от 0 до 100!")
-                return
-        except ValueError:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Приоритет должен быть числом!")
-            return
-        
-        new_name = parts[2].strip()
-        
-        if self.db.update_custom_role(chat_id, old_name, new_name, new_priority):
-            admin_info = self.get_user_info(user_id)
-            message = f"""{EMOJIS['check']} Роль обновлена!
-
-{EMOJIS['role']} Было: {old_name}
-{EMOJIS['role']} Стало: {new_name}
-{EMOJIS['priority']} Новый приоритет: {new_priority}
-{EMOJIS['police']} Обновил: [id{user_id}|{admin_info['full_name']}]
-
-{EMOJIS['list']} Посмотреть все роли: /roles""".strip()
-            self.send_message(chat_id, message)
-        else:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Роль '{old_name}' не найдена!")
-    
-    def handle_set_role(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
-        """Команда /setrole [@user] [роль] - назначение роли пользователю"""
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        # Пытаемся определить цель и роль
-        target_id = None
-        role_name = None
-        
-        if reply_message:
-            # Если есть ответ на сообщение, цель - автор того сообщения
-            target_id = reply_message['from_id']
-            role_name = args.strip()
-        else:
-            # Иначе ищем упоминание в тексте
-            parts = args.strip().split(maxsplit=1)
-            if len(parts) >= 2:
-                target_id = self.extract_mention_or_id(parts[0])
-                role_name = parts[1].strip()
-        
-        if not target_id or not role_name:
-            self.send_message(chat_id, f"""{EMOJIS['role']} Использование:
-1. /setrole @user [роль]
-2. /setrole [роль] (при ответе на сообщение)
-
-{EMOJIS['light']} Примеры:
-/setrole @durov Администратор
-/setrole Модератор (ответ на сообщение)""")
-            return
-        
-        # Проверяем права: админ может назначать только роли с приоритетом ниже своего
-        all_roles = self.db.get_all_roles_with_priority(chat_id)
-        if role_name not in all_roles:
-            # Проверяем, может это стандартная роль?
-            available_roles = "\n".join([f"  • {name} (приоритет {priority})" for name, priority in list(all_roles.items())[:10]])
-            self.send_message(chat_id, f"{EMOJIS['cross']} Роль '{role_name}' не найдена!\n\n{EMOJIS['list']} Доступные роли:\n{available_roles}\n\n{EMOJIS['light']} Полный список: /roles")
-            return
-        
-        target_priority = all_roles[role_name]
-        is_admin_target = self.is_chat_admin(target_id, chat_id)
-        
-        if not self.db.can_manage_role(user_id, target_priority, chat_id, self.is_chat_admin(user_id, chat_id)):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Вы не можете назначить эту роль! Ваш приоритет должен быть выше.")
-            return
-        
-        if is_admin_target:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Нельзя назначить роль администратору чата!")
-            return
-        
-        if self.db.assign_role_to_user(target_id, chat_id, role_name, user_id):
-            target_info = self.get_user_info(target_id)
-            admin_info = self.get_user_info(user_id)
-            
-            message = f"""{EMOJIS['check']} Роль назначена!
-
-{EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
-{EMOJIS['role']} Роль: {role_name}
-{EMOJIS['priority']} Приоритет: {target_priority}
-{EMOJIS['police']} Назначил: [id{user_id}|{admin_info['full_name']}]
-
-{EMOJIS['light']} Посмотреть все роли: /roles""".strip()
-            self.send_message(chat_id, message)
-        else:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Не удалось назначить роль!")
-    
-    def handle_remove_role(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
-        """Команда /removerole [@user] - снятие роли с пользователя"""
-        if not self.is_chat_admin(user_id, chat_id):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
-            return
-        
-        target_id = None
-        
-        if reply_message:
-            target_id = reply_message['from_id']
-        else:
-            target_id = self.extract_mention_or_id(args.strip())
-        
-        if not target_id:
-            self.send_message(chat_id, f"""{EMOJIS['role']} Использование:
-1. /removerole @user
-2. /removerole (при ответе на сообщение)
-
-{EMOJIS['light']} Пример: /removerole @durov""")
-            return
-        
-        user_role = self.db.get_user_role(target_id, chat_id)
-        if not user_role:
-            self.send_message(chat_id, f"{EMOJIS['cross']} У пользователя нет роли!")
-            return
-        
-        role_name, priority = user_role
-        is_admin_target = self.is_chat_admin(target_id, chat_id)
-        
-        if not self.db.can_manage_role(user_id, priority, chat_id, self.is_chat_admin(user_id, chat_id)):
-            self.send_message(chat_id, f"{EMOJIS['cross']} Вы не можете снять эту роль! Ваш приоритет должен быть выше.")
-            return
-        
-        if is_admin_target:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Нельзя снять роль с администратора чата!")
-            return
-        
-        if self.db.remove_user_role(target_id, chat_id):
-            target_info = self.get_user_info(target_id)
-            admin_info = self.get_user_info(user_id)
-            
-            message = f"""{EMOJIS['check']} Роль снята!
-
-{EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
-{EMOJIS['role']} Была роль: {role_name}
-{EMOJIS['police']} Снял: [id{user_id}|{admin_info['full_name']}]
-
-{EMOJIS['light']} Теперь пользователь без роли.""".strip()
-            self.send_message(chat_id, message)
-        else:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Не удалось снять роль!")
-    
-    def handle_roles_list(self, user_id: int, chat_id: int):
-        """Команда /roles - список всех доступных ролей"""
-        all_roles = self.db.get_all_roles_with_priority(chat_id)
-        
-        if not all_roles:
-            self.send_message(chat_id, f"{EMOJIS['role']} В этом чате пока нет ролей.\n{EMOJIS['light']} Администраторы могут создать роли командой /newrole")
-            return
-        
-        # Разделяем на стандартные и кастомные
-        custom_roles = []
-        default_roles = []
-        
-        self.db.cursor.execute(
-            "SELECT role_name FROM custom_roles WHERE chat_id = ?",
-            (chat_id,)
-        )
-        custom_names = [row[0] for row in self.db.cursor.fetchall()]
-        
-        for name, priority in all_roles.items():
-            if name in custom_names:
-                custom_roles.append((name, priority))
-            else:
-                default_roles.append((name, priority))
-        
-        message = f"{EMOJIS['role']} {EMOJIS['list']} Все доступные роли (в скобках приоритет):\n\n"
-        
-        if custom_roles:
-            message += f"{EMOJIS['star']} Кастомные роли:\n"
-            for name, priority in custom_roles:
-                message += f"  • {name} ({priority})\n"
-            message += "\n"
-        
-        if default_roles:
-            message += f"{EMOJIS['crown']} Стандартные роли:\n"
-            for name, priority in default_roles[:10]:
-                message += f"  • {name} ({priority})\n"
-            
-            if len(default_roles) > 10:
-                message += f"  {EMOJIS['light']} ... и еще {len(default_roles) - 10} ролей\n"
-        
-        message += f"\n{EMOJIS['light']} Назначить роль: /setrole @user [название]\n{EMOJIS['light']} Посмотреть свою роль: /myrole"
-        
-        self.send_message(chat_id, message.strip())
-    
-    def handle_my_role(self, user_id: int, chat_id: int):
-        """Команда /myrole - показать свою роль"""
-        user_role = self.db.get_user_role(user_id, chat_id)
-        is_admin = self.is_chat_admin(user_id, chat_id)
-        
-        user_info = self.get_user_info(user_id)
-        
-        if is_admin:
-            role_text = f"{EMOJIS['crown']} Администратор чата (приоритет 90)"
-        elif user_role:
-            role_name, priority = user_role
-            role_text = f"{EMOJIS['role']} {role_name} (приоритет {priority})"
-        else:
-            role_text = f"{EMOJIS['user']} Обычный участник (приоритет 0)"
-        
-        message = f"""{EMOJIS['profile']} Ваша роль
-
-{EMOJIS['user']} Пользователь: [id{user_id}|{user_info['full_name']}]
-{role_text}
-
-{EMOJIS['list']} Посмотреть все роли: /roles""".strip()
-        
-        self.send_message(chat_id, message)
-    
-    def handle_user_role(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
-        """Команда /userrole [@user] - показать роль пользователя"""
-        target_id = None
-        
-        if reply_message:
-            target_id = reply_message['from_id']
-        else:
-            target_id = self.extract_mention_or_id(args.strip())
-        
-        if not target_id:
-            self.send_message(chat_id, f"""{EMOJIS['role']} Использование:
-1. /userrole @user
-2. /userrole (при ответе на сообщение)
-
-{EMOJIS['light']} Пример: /userrole @durov""")
-            return
-        
-        user_info = self.get_user_info(target_id)
-        user_role = self.db.get_user_role(target_id, chat_id)
-        is_admin = self.is_chat_admin(target_id, chat_id)
-        
-        if is_admin:
-            role_text = f"{EMOJIS['crown']} Администратор чата (приоритет 90)"
-        elif user_role:
-            role_name, priority = user_role
-            role_text = f"{EMOJIS['role']} {role_name} (приоритет {priority})"
-        else:
-            role_text = f"{EMOJIS['user']} Обычный участник (приоритет 0)"
-        
-        message = f"""{EMOJIS['profile']} Роль пользователя
-
-{EMOJIS['user']} Пользователь: [id{target_id}|{user_info['full_name']}]
-{role_text}
-
-{EMOJIS['list']} Посмотреть все роли: /roles""".strip()
-        
-        self.send_message(chat_id, message)
-    
-    # ========== ОСНОВНЫЕ КОМАНДЫ ==========
+    # ========== ИСПРАВЛЕННЫЕ КОМАНДЫ ==========
     
     def handle_create_rules(self, user_id: int, chat_id: int, args: str):
-        """Команда /createpravila - установка правил"""
+        """ФИКСИРОВАННАЯ команда: /createpravila - установка правил"""
         if not self.is_chat_admin(user_id, chat_id):
             self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
             return
@@ -1080,6 +562,7 @@ class VKAvroraBot:
 3. Не рекламировать""")
             return
         
+        # ФИКС: Правильно сохраняем правила
         if self.db.set_rules(chat_id, args.strip()):
             message = f"""{EMOJIS['check']} {EMOJIS['rules']} Правила чата обновлены!
 
@@ -1087,14 +570,15 @@ class VKAvroraBot:
 {EMOJIS['light']} Теперь участники могут посмотреть их командой /правила
 
 {EMOJIS['book']} Для просмотра: /правила
-{EMOJIS['pen']} Для редактирования: /createpravila [новый текст]"""
+{EMOJIS['pen']} Для редактирования: /createpravila [новый текст]
+""".strip()
         else:
             message = f"{EMOJIS['cross']} Ошибка при сохранении правил. Попробуйте еще раз."
         
         self.send_message(chat_id, message)
     
     def handle_welcome(self, user_id: int, chat_id: int, args: str):
-        """Команда /приветствие - установка приветствия (ИСПРАВЛЕНО)"""
+        """ФИКСИРОВАННАЯ команда: /приветствие - установка приветствия"""
         if not self.is_chat_admin(user_id, chat_id):
             self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
             return
@@ -1108,21 +592,22 @@ class VKAvroraBot:
 Пример: /приветствие Добро пожаловать в наш чат! Правила: /правила""")
             return
         
-        # Сохраняем приветствие в базу данных
+        # ФИКС: Правильно сохраняем приветствие
         if self.db.set_welcome_message(chat_id, args.strip()):
             message = f"""{EMOJIS['check']} {EMOJIS['welcome']} Приветствие обновлено!
 
 {EMOJIS['scroll']} Новое приветствие:
 {args.strip()}
 
-{EMOJIS['light']} Теперь это сообщение будет показываться новым участникам при входе в чат."""
+{EMOJIS['light']} Теперь это сообщение будет показываться новым участникам при входе в чат.
+""".strip()
         else:
             message = f"{EMOJIS['cross']} Ошибка при сохранении приветствия. Попробуйте еще раз."
         
         self.send_message(chat_id, message)
     
     def handle_rules(self, user_id: int, chat_id: int):
-        """Команда /правила - просмотр правил"""
+        """ФИКСИРОВАННАЯ команда: /правила - просмотр правил"""
         rules_text = self.db.get_rules(chat_id)
         
         if not rules_text or rules_text == 'Правила еще не установлены. Администраторы могут установить их командой /createpravila':
@@ -1136,7 +621,8 @@ class VKAvroraBot:
 {EMOJIS['light']} Пример:
 /createpravila 1. Не спамить
 2. Уважать других участников
-3. Не размещать рекламу"""
+3. Не размещать рекламу
+""".strip()
         else:
             message = f"""{EMOJIS['rules']} Правила чата:
 
@@ -1148,13 +634,13 @@ class VKAvroraBot:
 {EMOJIS['no_entry']} 3 предупреждения - автоматический бан
 {EMOJIS['police']} Администраторы могут выдавать муты и баны
 
-{EMOJIS['light']} По всем вопросам обращайтесь к администраторам."""
+{EMOJIS['light']} По всем вопросам обращайтесь к администраторам.
+""".strip()
         
         self.send_message(chat_id, message)
     
     def handle_new_chat_member(self, chat_id: int, user_id: int):
-        """Обработчик новых участников (ИСПРАВЛЕНО)"""
-        # Проверяем, не забанен ли пользователь
+        """ФИКСИРОВАННЫЙ обработчик: приветствие новых участников"""
         user_data = self.db.get_user(user_id, chat_id)
         if user_data and user_data.get('kicked', 0) == 1:
             if user_data['ban_until'] > time.time() or user_data['ban_until'] == 0:
@@ -1167,16 +653,14 @@ class VKAvroraBot:
                     return
                 except Exception as e:
                     print(f"{EMOJIS['cross']} Ошибка при кике забаненного: {e}")
-                    return
         
-        # Добавляем пользователя в базу
         self.db.add_user(user_id, chat_id)
         
-        # ПОЛУЧАЕМ ПРИВЕТСТВИЕ ИЗ БАЗЫ ДАННЫХ
+        # ФИКС: Получаем приветствие из базы данных
         welcome_message = self.db.get_welcome_message(chat_id)
         user_info = self.get_user_info(user_id)
         
-        message = f"""{EMOJIS['welcome']} Добро пожаловать в чат!
+        message = f"""{EMOJIS['welcome']} Добро пожаловать!
 
 {EMOJIS['party']} Приветствуем нового участника:
 [id{user_id}|{user_info['full_name']}]
@@ -1184,47 +668,9 @@ class VKAvroraBot:
 {EMOJIS['bell']} {welcome_message}
 
 {EMOJIS['rules']} Обязательно ознакомьтесь с /правила
-{EMOJIS['cmd']} Список всех команд: /CMD
-{EMOJIS['info']} Ваша статистика: /профиль"""
-        
-        self.send_message(chat_id, message)
-    
-    def handle_bot_added(self, chat_id: int, user_id: int):
-        """Обработчик добавления бота в чат"""
-        settings = self.db.get_chat_settings(chat_id)
-        
-        # Проверяем, отправляли ли уже сообщение
-        if settings.get('bot_added_message_sent', 0) == 1:
-            return
-        
-        # Отмечаем, что сообщение отправлено
-        self.db.set_bot_added_message_sent(chat_id, 1)
-        
-        message = f"""{EMOJIS['robot']} {EMOJIS['party']} Спасибо что добавили меня в чат!
-
-{EMOJIS['warning']} {EMOJIS['mega']} ВАЖНО: Для полноценной работы мне необходимы права администратора!
-
-{EMOJIS['gear']} Что нужно сделать:
-1. Откройте настройки беседы
-2. Перейдите в раздел \"Участники\"
-3. Найдите меня в списке (Avrora Manager)
-4. Назначьте администратором с правами:
-   {EMOJIS['check']} Управление беседой
-   {EMOJIS['check']} Удаление сообщений
-   {EMOJIS['check']} Исключение участников
-
-{EMOJIS['crown']} Только после этого будут работать команды:
-{EMOJIS['mute']} /mute - ограничение на отправку сообщений
-{EMOJIS['kick']} /kick - исключение из чата
-{EMOJIS['no_entry']} /ban - бан пользователя
-{EMOJIS['warning']} /warn - предупреждения
-
-{EMOJIS['cmd']} Все команды: /CMD
-{EMOJIS['rules']} Установка правил: /createpravila [текст]
-{EMOJIS['welcome']} Приветствие: /приветствие [текст]
-
-{EMOJIS['light']} Если права уже выданы - игнорируйте это сообщение."""
-        
+{EMOJIS['help']} Помощь по командам: /help
+{EMOJIS['info']} Ваша статистика: /профиль
+""".strip()
         self.send_message(chat_id, message)
     
     def handle_admin_stats(self, user_id: int, chat_id: int):
@@ -1241,7 +687,7 @@ class VKAvroraBot:
         for admin_id in admins:
             if admin_id < 0:
                 continue
-            
+                
             admin_info = self.get_user_info(admin_id)
             admin_list.append(f"{EMOJIS['police']} [id{admin_id}|{admin_info['full_name']}]")
         
@@ -1254,12 +700,30 @@ class VKAvroraBot:
 {EMOJIS['no_entry']} В бане: {stats['banned_users']}
 {EMOJIS['calendar']} Варнов сегодня: {stats['warns_today']}
 
+{EMOJIS['gear']} Настройки чата:
+{self.get_chat_settings_info(chat_id)}
+
 {EMOJIS['crown']} Администраторы чата ({len(admin_list)}):
 {chr(10).join(admin_list) if admin_list else f"{EMOJIS['cross']} Нет данных"}
 
-{EMOJIS['cmd']} Используйте /CMD для списка команд"""
-        
+{EMOJIS['light']} Используйте /help для списка команд
+""".strip()
         self.send_message(chat_id, message)
+    
+    def get_chat_settings_info(self, chat_id: int) -> str:
+        """ФИКС: Информация о настройках чата"""
+        settings = self.db.get_chat_settings(chat_id)
+        rules_text = settings.get('rules_text', '')
+        has_rules = bool(rules_text.strip()) and rules_text != 'Правила еще не установлены. Администраторы могут установить их командой /createpravila'
+        
+        welcome_msg = settings.get('welcome_message', 'Добро пожаловать в чат!')
+        if len(welcome_msg) > 50:
+            welcome_msg = welcome_msg[:47] + "..."
+        
+        return f"""{EMOJIS['welcome']} Приветствие: {welcome_msg}
+{EMOJIS['rules']} Правила: {'✅ Установлены' if has_rules else '❌ Не установлены'}
+{EMOJIS['warning']} Макс. варнов: {settings.get('max_warns', 3)}
+{EMOJIS['ban_hammer']} Длительность автобана: {settings.get('ban_duration', 10)} дней"""
     
     def handle_mute(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
         if not self.is_chat_admin(user_id, chat_id):
@@ -1269,7 +733,7 @@ class VKAvroraBot:
         parts = args.strip().split()
         if len(parts) < 1 and not reply_message:
             self.send_message(chat_id, f"""{EMOJIS['mute']} Использование: 
-1. /mute @user время причина
+1. /mute @avroramanager время причина
 2. /mute время причина (при ответе на сообщение)
 
 {EMOJIS['clock']} Примеры времени:
@@ -1280,7 +744,7 @@ class VKAvroraBot:
 0 или пусто - бессрочно
 
 {EMOJIS['light']} Примеры:
-/mute @durov 30m спам
+/mute @avroramanager 30m спам
 /mute 1d флуд (при ответе на сообщение)""")
             return
         
@@ -1304,7 +768,7 @@ class VKAvroraBot:
                     reason_idx = 2
         
         if not target_id:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @user, ID или ответьте на сообщение.")
+            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @avroramanager, ID или ответьте на сообщение.")
             return
         
         if target_id == user_id:
@@ -1367,8 +831,8 @@ class VKAvroraBot:
 {EMOJIS['pen']} Причина: {reason}
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
-{EMOJIS['warning']} Нарушитель не сможет писать в чат до окончания мута."""
-        
+{EMOJIS['warning']} Нарушитель не сможет писать в чат до окончания мута.
+""".strip()
         self.send_message(chat_id, message)
     
     def handle_warn(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
@@ -1393,7 +857,7 @@ class VKAvroraBot:
             reason = args if args.strip() else "Не указана"
         
         if not target_id:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @user или ответьте на сообщение.")
+            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @avroramanager или ответьте на сообщение.")
             return
         
         if target_id == user_id:
@@ -1425,7 +889,8 @@ class VKAvroraBot:
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 {EMOJIS['warning']} Получено варнов: {max_warns}/{max_warns}
 
-{EMOJIS['ban_hammer']} Результат: Автоматический бан на {settings.get('ban_duration', 10)} дней за превышение лимита предупреждений."""
+{EMOJIS['ban_hammer']} Результат: Автоматический бан на {settings.get('ban_duration', 10)} дней за превышение лимита предупреждений.
+""".strip()
             try:
                 self.vk.messages.removeChatUser(
                     chat_id=chat_id,
@@ -1441,7 +906,8 @@ class VKAvroraBot:
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 {EMOJIS['chart']} Варнов: {user_stats['warns']}/{max_warns}
 
-{EMOJIS['light']} Внимание: При достижении {max_warns} предупреждений последует автоматический бан на {settings.get('ban_duration', 10)} дней."""
+{EMOJIS['light']} Внимание: При достижении {max_warns} предупреждений последует автоматический бан на {settings.get('ban_duration', 10)} дней.
+""".strip()
         
         self.send_message(chat_id, message)
     
@@ -1467,7 +933,7 @@ class VKAvroraBot:
             reason = args if args.strip() else "Не указана"
         
         if not target_id:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @user или ответьте на сообщение.")
+            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @avroramanager или ответьте на сообщение.")
             return
         
         if target_id == user_id:
@@ -1496,8 +962,8 @@ class VKAvroraBot:
 {EMOJIS['pen']} Причина: {reason}
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
-{EMOJIS['light']} Пользователь может вернуться в чат по приглашению."""
-            
+{EMOJIS['light']} Пользователь может вернуться в чат по приглашению.
+""".strip()
             self.send_message(chat_id, message)
             
         except Exception as e:
@@ -1515,7 +981,7 @@ class VKAvroraBot:
         parts = args.strip().split()
         if len(parts) < 1 and not reply_message:
             self.send_message(chat_id, f"""{EMOJIS['no_entry']} Использование:
-1. /ban @user время причина
+1. /ban @avroramanager время причина
 2. /ban время причина (при ответе на сообщение)
 
 {EMOJIS['clock']} Примеры времени:
@@ -1525,7 +991,7 @@ class VKAvroraBot:
 0 или пусто - бессрочно
 
 {EMOJIS['light']} Примеры:
-/ban @durov 10d спам
+/ban @avroramanager 10d спам
 /ban 7d нарушение (при ответе на сообщение)""")
             return
         
@@ -1549,7 +1015,7 @@ class VKAvroraBot:
                     reason_idx = 2
         
         if not target_id:
-            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @user, ID или ответьте на сообщение.")
+            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @avroramanager, ID или ответьте на сообщение.")
             return
         
         if target_id == user_id:
@@ -1609,8 +1075,8 @@ class VKAvroraBot:
 {EMOJIS['pen']} Причина: {reason}
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
-{EMOJIS['warning']} Пользователь будет автоматически кикаться при попытке вернуться в чат."""
-        
+{EMOJIS['warning']} Пользователь будет автоматически кикаться при попытке вернуться в чат.
+""".strip()
         self.send_message(chat_id, message)
     
     def handle_self_kick(self, user_id: int, chat_id: int):
@@ -1622,6 +1088,75 @@ class VKAvroraBot:
         except Exception as e:
             self.send_message(chat_id, f"{EMOJIS['cross']} Ошибка при выходе: {str(e)}")
     
+    def handle_set_nick(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
+        if not self.is_chat_admin(user_id, chat_id):
+            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
+            return
+        
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            self.send_message(chat_id, f"""{EMOJIS['role']} Использование:
+1. /snick @avroramanager роль
+2. /snick роль (при ответе на сообщение)
+
+{EMOJIS['light']} Примеры:
+/snick @avroramanager Босс
+/snick Модератор (при ответе на сообщение)""")
+            return
+        
+        target_id = None
+        role_name = ""
+        
+        if parts[0].startswith('@') or 'id' in parts[0] or parts[0].isdigit():
+            target_id = self.extract_mention_or_id(parts[0], reply_message)
+            if target_id:
+                role_name = parts[1]
+        
+        if not target_id and reply_message:
+            target_id = self.extract_mention_or_id('', reply_message)
+            role_name = args
+        
+        if not target_id:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Не указан пользователь. Используйте @avroramanager, ID или ответьте на сообщение.")
+            return
+        
+        if not role_name:
+            self.send_message(chat_id, f"{EMOJIS['cross']} Не указана роль.")
+            return
+        
+        self.db.set_role(target_id, chat_id, role_name)
+        
+        target_info = self.get_user_info(target_id)
+        admin_info = self.get_user_info(user_id)
+        
+        message = f"""{EMOJIS['role']} Роль установлена
+
+{EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
+{EMOJIS['crown']} Роль: {role_name}
+{EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
+
+{EMOJIS['light']} Используйте /niclist для просмотра всех ролей.
+""".strip()
+        self.send_message(chat_id, message)
+    
+    def handle_nick_list(self, user_id: int, chat_id: int):
+        roles = self.db.get_all_roles(chat_id)
+        
+        if not roles:
+            self.send_message(chat_id, f"{EMOJIS['role']} В этом чате еще нет установленных ролей.\n{EMOJIS['light']} Администраторы могут выдать роли командой /snick [@avroramanager] [роль]")
+            return
+        
+        message = f"{EMOJIS['role']} {EMOJIS['scroll']} Список ролей в чате:\n\n"
+        
+        for user_id, role_name in roles[:20]:
+            user_info = self.get_user_info(user_id)
+            message += f"{EMOJIS['star']} [id{user_id}|{user_info['full_name']}] - {role_name}\n"
+        
+        if len(roles) > 20:
+            message += f"\n{EMOJIS['light']} ... и еще {len(roles) - 20} ролей"
+        
+        self.send_message(chat_id, message.strip())
+    
     def handle_unmute(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
         if not self.is_chat_admin(user_id, chat_id):
             self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
@@ -1630,11 +1165,11 @@ class VKAvroraBot:
         target_id = self.extract_mention_or_id(args, reply_message)
         if not target_id:
             self.send_message(chat_id, f"""{EMOJIS['mute']} Использование:
-1. /размут @user
+1. /размут @avroramanager
 2. /размут (при ответе на сообщение)
 
 {EMOJIS['light']} Примеры:
-/размут @durov
+/размут @avroramanager
 /размут (при ответе на сообщение)""")
             return
         
@@ -1648,8 +1183,8 @@ class VKAvroraBot:
 {EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
-{EMOJIS['check']} Теперь пользователь может писать в чат."""
-        
+{EMOJIS['check']} Теперь пользователь может писать в чат.
+""".strip()
         self.send_message(chat_id, message)
     
     def handle_unban(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
@@ -1660,11 +1195,11 @@ class VKAvroraBot:
         target_id = self.extract_mention_or_id(args, reply_message)
         if not target_id:
             self.send_message(chat_id, f"""{EMOJIS['no_entry']} Использование:
-1. /разбан @user
+1. /разбан @avroramanager
 2. /разбан (при ответе на сообщение)
 
 {EMOJIS['light']} Примеры:
-/разбан @durov
+/разбан @avroramanager
 /разбан (при ответе на сообщение)""")
             return
         
@@ -1678,8 +1213,8 @@ class VKAvroraBot:
 {EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
-{EMOJIS['light']} Теперь пользователь может вернуться в чат."""
-        
+{EMOJIS['light']} Теперь пользователь может вернуться в чат.
+""".strip()
         self.send_message(chat_id, message)
     
     def handle_unwarn(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
@@ -1690,11 +1225,11 @@ class VKAvroraBot:
         target_id = self.extract_mention_or_id(args, reply_message)
         if not target_id:
             self.send_message(chat_id, f"""{EMOJIS['warning']} Использование:
-1. /снятьварн @user
+1. /снятьварн @avroramanager
 2. /снятьварн (при ответе на сообщение)
 
 {EMOJIS['light']} Примеры:
-/снятьварн @durov
+/снятьварн @avroramanager
 /снятьварн (при ответе на сообщение)""")
             return
         
@@ -1707,82 +1242,14 @@ class VKAvroraBot:
 {EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
 {EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
 
-{EMOJIS['check']} Одно предупреждение снято."""
+{EMOJIS['check']} Одно предупреждение снято.
+""".strip()
         else:
             message = f"{EMOJIS['cross']} У пользователя нет активных предупреждений."
         
         self.send_message(chat_id, message)
     
-    # ========== КОМАНДЫ ДЛЯ ВСЕХ ==========
-    
-    def handle_cmd(self, user_id: int, chat_id: int):
-        """Команда /CMD - список всех команд"""
-        is_admin = self.is_chat_admin(user_id, chat_id)
-        
-        if is_admin:
-            message = f"""{EMOJIS['cmd']} {EMOJIS['admin_cmd']} ПОЛНЫЙ СПИСОК КОМАНД
-
-{EMOJIS['crown']} АДМИНИСТРАТОРСКИЕ КОМАНДЫ:
-
-{EMOJIS['role']} • УПРАВЛЕНИЕ РОЛЯМИ:
-/newrole [приоритет] [название] - создать роль
-/deleterole [название] - удалить роль
-/updaterole [старое] [приоритет] [новое] - обновить роль
-/setrole @user [роль] - назначить роль
-/removerole @user - снять роль
-/roles - все доступные роли
-/userrole @user - роль пользователя
-
-{EMOJIS['gavel']} • НАКАЗАНИЯ:
-/mute @user время причина - мут
-/warn @user причина - предупреждение
-/kick @user причина - кик
-/ban @user время причина - бан
-/размут @user - снять мут
-/разбан @user - снять бан
-/снятьварн @user - снять варн
-
-{EMOJIS['gear']} • НАСТРОЙКИ:
-/createpravila [текст] - установить правила
-/приветствие [текст] - установить приветствие
-/admin - статистика админа
-
-{EMOJIS['user']} ОБЩИЕ КОМАНДЫ:
-
-{EMOJIS['info']} /инфо [@user] - инфо о пользователе
-{EMOJIS['poll']} /опрос вопрос | вар1 | вар2 - создать опрос
-{EMOJIS['chart']} /опросрезультаты [номер] - результаты
-{EMOJIS['profile']} /профиль - ваш профиль
-{EMOJIS['myrole']} /myrole - ваша роль
-{EMOJIS['online']} /онлайн - кто онлайн
-{EMOJIS['rules']} /правила - правила чата
-{EMOJIS['exit']} /q - выйти из чата
-{EMOJIS['cmd']} /CMD - этот список
-
-{EMOJIS['clock']} Форматы времени: 30m, 2h, 1d, 7d, 0 - бессрочно
-
-{EMOJIS['warning']} Для работы мута/бана/кика бот должен быть админом чата!"""
-        else:
-            message = f"""{EMOJIS['cmd']} {EMOJIS['user_cmd']} ДОСТУПНЫЕ КОМАНДЫ
-
-{EMOJIS['info']} /инфо [@user] - информация о пользователе
-{EMOJIS['poll']} /опрос вопрос | вар1 | вар2 - создать опрос
-{EMOJIS['chart']} /опросрезультаты [номер] - результаты опроса
-{EMOJIS['profile']} /профиль - ваш профиль
-{EMOJIS['myrole']} /myrole - ваша роль
-{EMOJIS['online']} /онлайн - кто онлайн
-{EMOJIS['rules']} /правила - правила чата
-{EMOJIS['roles']} /roles - список всех ролей
-{EMOJIS['userrole']} /userrole @user - роль пользователя
-{EMOJIS['exit']} /q - выйти из чата
-{EMOJIS['cmd']} /CMD - этот список
-
-{EMOJIS['gavel']} СИСТЕМА НАКАЗАНИЙ:
-{EMOJIS['warning']} 3 предупреждения = автоматический бан
-
-{EMOJIS['light']} По вопросам обращайтесь к администраторам чата."""
-        
-        self.send_message(chat_id, message)
+    # ========== НОВЫЕ КОМАНДЫ ==========
     
     def handle_info(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
         """Команда /инфо - информация о пользователе"""
@@ -1796,15 +1263,14 @@ class VKAvroraBot:
         user_stats = self.db.get_user_stats(target_id, chat_id)
         
         is_admin = self.is_chat_admin(target_id, chat_id)
-        user_role = self.db.get_user_role(target_id, chat_id)
+        db_role = self.db.get_role(target_id, chat_id)
         
-        if user_role:
-            role_name, priority = user_role
-            role_text = f"{EMOJIS['role']} {role_name} (приоритет {priority})"
+        if db_role:
+            role_text = f"{EMOJIS['crown']} {db_role}"
         elif is_admin:
-            role_text = f"{EMOJIS['crown']} Администратор чата (приоритет 90)"
+            role_text = f"{EMOJIS['crown']} Администратор"
         else:
-            role_text = f"{EMOJIS['user']} Обычный участник (приоритет 0)"
+            role_text = f"{EMOJIS['user']} Участник"
         
         status = []
         if user_stats.get('muted'):
@@ -1841,19 +1307,20 @@ class VKAvroraBot:
         
         message = f"""{EMOJIS['info']} Информация о пользователе
 
-{EMOJIS['user']} ОСНОВНАЯ ИНФОРМАЦИЯ:
+{EMOJIS['user']} Основная информация:
 {EMOJIS['light']} Имя: {user_info['full_name']}
 {EMOJIS['light']} ID: {target_id}
-{role_text}
+{EMOJIS['role']} Роль: {role_text}
 {EMOJIS['star']} Статус: {', '.join(status)}
 
-{EMOJIS['chart']} СТАТИСТИКА:
+{EMOJIS['chart']} Статистика:
 {EMOJIS['warning']} Активные предупреждения: {user_stats.get('warns', 0)}
 {EMOJIS['chart']} Всего предупреждений: {user_stats.get('total_warns', 0)}
 {EMOJIS['calendar']} В чате с: {join_date}
 {warns_history}
 
-{EMOJIS['cmd']} Полный список команд: /CMD"""
+{EMOJIS['light']} ID можно использовать для команд: /warn @id{target_id} причина
+""".strip()
         
         self.send_message(chat_id, message)
     
@@ -1866,8 +1333,8 @@ class VKAvroraBot:
 /опрос Какой день лучше для встречи? | Понедельник | Вторник | Среда
 /опрос Любимый цвет? | Красный | Синий | Зеленый | Желтый
 
-{EMOJIS['vote']} Голосовать: ответьте на сообщение с номером варианта (1, 2, 3...)
-{EMOJIS['chart']} Результаты: /опросрезультаты""")
+{EMOJIS['vote']} После создания опроса участники могут голосовать, отвечая на сообщение с номером варианта (1, 2, 3...)
+{EMOJIS['chart']} Чтобы увидеть результаты, используйте /опросрезультаты""")
             return
         
         parts = args.split('|')
@@ -1901,9 +1368,12 @@ class VKAvroraBot:
 {options_text}
 {EMOJIS['user']} Создал: [id{user_id}|{user_info['full_name']}]
 
-{EMOJIS['light']} Голосование: ответьте на это сообщение с номером варианта (1, 2, 3...)
+{EMOJIS['light']} Как голосовать:
+1. Ответьте на это сообщение
+2. Напишите номер выбранного варианта (1, 2, 3...)
 
-{EMOJIS['chart']} Результаты: /опросрезультаты {poll_id}"""
+{EMOJIS['chart']} Чтобы посмотреть результаты: /опросрезультаты {poll_id}
+""".strip()
         
         self.send_message(chat_id, message)
     
@@ -1913,7 +1383,7 @@ class VKAvroraBot:
             active_polls = self.db.get_active_polls(chat_id)
             
             if not active_polls:
-                self.send_message(chat_id, f"{EMOJIS['poll']} В этом чате нет активных опросов.\n{EMOJIS['light']} Создайте опрос: /опрос вопрос | вариант1 | вариант2")
+                self.send_message(chat_id, f"{EMOJIS['poll']} В этом чате нет активных опросов.\n{EMOJIS['light']} Создайте опрос командой: /опрос вопрос | вариант1 | вариант2")
                 return
             
             message = f"{EMOJIS['poll']} Активные опросы:\n\n"
@@ -1966,7 +1436,8 @@ class VKAvroraBot:
 {EMOJIS['vote']} Всего голосов: {total_votes}
 {EMOJIS['user']} Создал: [id{results['creator_id']}|{creator_info['full_name']}]
 
-{EMOJIS['clock']} Создан: {results['created_at'][:19]}"""
+{EMOJIS['clock']} Создан: {results['created_at'][:19]}
+""".strip()
         
         self.send_message(chat_id, message)
     
@@ -2007,30 +1478,93 @@ class VKAvroraBot:
 
 {EMOJIS['vote']} Вы выбрали: {option_text}
 {EMOJIS['chart']} За этот вариант: {votes_for_option} голосов ({percentage:.1f}%)
-{EMOJIS['light']} Всего голосов: {total_votes}
+{EMOJIS['light']} Всего голосов в опросе: {total_votes}
 
-{EMOJIS['poll']} Результаты: /опросрезультаты {poll_id}"""
+{EMOJIS['poll']} Чтобы посмотреть все результаты: /опросрезультаты {poll_id}
+""".strip()
             
             self.send_message(chat_id, message)
         else:
             self.send_message(chat_id, f"{EMOJIS['cross']} [id{user_id}|Не удалось зарегистрировать ваш голос]")
     
+    def handle_help(self, user_id: int, chat_id: int):
+        is_admin = self.is_chat_admin(user_id, chat_id)
+        
+        if is_admin:
+            message = f"""{EMOJIS['robot']} Avrora Chat Manager - Помощь
+
+{EMOJIS['crown']} Команды администраторов чата:
+{EMOJIS['chart']} /admin - Статистика админа
+{EMOJIS['rules']} /createpravila текст - Установить правила чата
+{EMOJIS['mute']} /mute [@avroramanager или ответ] время причина - Мут пользователя
+{EMOJIS['warning']} /warn [@avroramanager или ответ] причина - Предупреждение
+{EMOJIS['kick']} /kick [@avroramanager или ответ] причина - Кик пользователя
+{EMOJIS['no_entry']} /ban [@avroramanager или ответ] время причина - Бан пользователя
+{EMOJIS['welcome']} /приветствие текст - Установить приветствие
+{EMOJIS['role']} /snick [@avroramanager или ответ] роль - Выдать роль
+{EMOJIS['unlock']} /размут [@avroramanager или ответ] - Снять мут
+{EMOJIS['unlock']} /разбан [@avroramanager или ответ] - Снять бан
+{EMOJIS['check']} /снятьварн [@avroramanager или ответ] - Снять предупреждение
+
+{EMOJIS['user']} Команды для всех участников:
+{EMOJIS['info']} /инфо [@пользователь] - Информация о пользователе
+{EMOJIS['poll']} /опрос вопрос | вар1 | вар2 | ... - Создать опрос
+{EMOJIS['chart']} /опросрезультаты [номер] - Результаты опроса
+{EMOJIS['help']} /help - Эта справка
+{EMOJIS['exit']} /q - Выйти из чата
+{EMOJIS['role']} /niclist - Список ролей
+{EMOJIS['rules']} /правила - Правила чата
+{EMOJIS['online']} /онлайн - Кто онлайн
+{EMOJIS['profile']} /профиль - Ваша статистика
+
+{EMOJIS['clock']} Примеры времени для /mute и /ban:
+{EMOJIS['light']} 30m - 30 минут
+{EMOJIS['light']} 2h - 2 часа  
+{EMOJIS['light']} 1d - 1 день
+{EMOJIS['light']} 7d - 7 дней
+{EMOJIS['light']} 30d - 30 дней
+{EMOJIS['light']} 0 или пусто - бессрочно
+
+{EMOJIS['light']} Примечание: Администратором считается владелец чата и пользователи с правами администратора в настройках беседы.
+""".strip()
+        else:
+            message = f"""{EMOJIS['robot']} Avrora Chat Manager - Помощь
+
+{EMOJIS['user']} Доступные команды:
+{EMOJIS['info']} /инфо [@пользователь] - Информация о пользователе
+{EMOJIS['poll']} /опрос вопрос | вар1 | вар2 | ... - Создать опрос (если разрешено)
+{EMOJIS['chart']} /опросрезультаты [номер] - Результаты опроса
+{EMOJIS['help']} /help - Эта справка
+{EMOJIS['exit']} /q - Выйти из чата
+{EMOJIS['role']} /niclist - Список ролей
+{EMOJIS['rules']} /правила - Правила чата
+{EMOJIS['online']} /онлайн - Кто онлайн
+{EMOJIS['profile']} /профиль - Ваша статистика
+
+{EMOJIS['gavel']} Система наказаний:
+{EMOJIS['warning']} 3 предупреждения = автоматический бан
+{EMOJIS['mute']} Мут ограничивает отправку сообщений
+{EMOJIS['no_entry']} Бан исключает из чата на время
+
+{EMOJIS['light']} По всем вопросам обращайтесь к администраторам чата.
+""".strip()
+        
+        self.send_message(chat_id, message)
+    
     def handle_profile(self, user_id: int, chat_id: int):
-        """Команда /профиль - профиль пользователя"""
         self.db.add_user(user_id, chat_id)
         stats = self.db.get_user_stats(user_id, chat_id)
         user_info = self.get_user_info(user_id)
         
         is_admin = self.is_chat_admin(user_id, chat_id)
-        user_role = self.db.get_user_role(user_id, chat_id)
         
-        if user_role:
-            role_name, priority = user_role
-            role_text = f"{EMOJIS['role']} {role_name} (приоритет {priority})"
+        db_role = self.db.get_role(user_id, chat_id)
+        if db_role:
+            role = f"{EMOJIS['crown']} {db_role}"
         elif is_admin:
-            role_text = f"{EMOJIS['crown']} Администратор чата (приоритет 90)"
+            role = f"{EMOJIS['crown']} Администратор"
         else:
-            role_text = f"{EMOJIS['user']} Обычный участник (приоритет 0)"
+            role = f"{EMOJIS['user']} Участник"
         
         status = f"{EMOJIS['green_circle']} Активен"
         if stats.get('muted'):
@@ -2049,19 +1583,18 @@ class VKAvroraBot:
         message = f"""{EMOJIS['profile']} Ваш профиль
 
 {EMOJIS['user']} Имя: {user_info['full_name']}
-{role_text}
+{EMOJIS['role']} Роль: {role}
 {EMOJIS['warning']} Активные предупреждения: {stats.get('warns', 0)}
 {EMOJIS['chart']} Всего получено варнов: {stats.get('total_warns', 0)}
 {EMOJIS['calendar']} В чате с: {join_date}
 {EMOJIS['star']} Статус: {status}
 
 {EMOJIS['info']} Подробная информация: /инфо
-{EMOJIS['cmd']} Все команды: /CMD"""
-        
+{EMOJIS['light']} Чтобы увидеть все команды, напишите /help
+""".strip()
         self.send_message(chat_id, message)
     
     def handle_online(self, user_id: int, chat_id: int):
-        """Команда /онлайн - кто онлайн"""
         try:
             chat_info = self.vk.messages.getConversationMembers(
                 peer_id=2000000000 + chat_id,
@@ -2092,7 +1625,6 @@ class VKAvroraBot:
             self.send_message(chat_id, f"{EMOJIS['cross']} Ошибка: {str(e)}")
     
     def check_punishments(self):
-        """Проверка истечения наказаний"""
         while True:
             try:
                 current_time = int(time.time())
@@ -2123,24 +1655,14 @@ class VKAvroraBot:
             time.sleep(60)
     
     def process_message(self, event):
-        """Обработка входящих сообщений"""
         try:
             message = event.object.message
             chat_id = event.chat_id
             user_id = message['from_id']
             text = message.get('text', '').strip()
             
-            # Проверяем, не обрабатывали ли мы уже это событие
-            event_id = f"{chat_id}_{message.get('conversation_message_id', '')}"
-            if event_id in self.processed_events:
-                return
-            self.processed_events.add(event_id)
-            if len(self.processed_events) > 1000:
-                self.processed_events.clear()
-            
             print(f"{EMOJIS['robot']} Сообщение от {user_id} в чате {chat_id}: {text}")
             
-            # Проверяем наказания
             user_data = self.db.get_user(user_id, chat_id)
             
             if user_data and user_data['ban_until'] > 0:
@@ -2173,8 +1695,7 @@ class VKAvroraBot:
                     except Exception as e:
                         print(f"{EMOJIS['cross']} Не удалось удалить сообщение замученного: {e}")
                     return
-            
-            # Обработка команд
+        
             if text.startswith('/'):
                 command_parts = text.split(maxsplit=1)
                 command = command_parts[0].lower()
@@ -2182,87 +1703,88 @@ class VKAvroraBot:
                 
                 reply_message = message.get('reply_message')
                 
-                # Команды для ролей
-                if command == '/newrole':
-                    self.handle_new_role(user_id, chat_id, args)
-                elif command == '/deleterole':
-                    self.handle_delete_role(user_id, chat_id, args)
-                elif command == '/updaterole':
-                    self.handle_update_role(user_id, chat_id, args)
-                elif command == '/setrole':
-                    self.handle_set_role(user_id, chat_id, args, reply_message)
-                elif command == '/removerole':
-                    self.handle_remove_role(user_id, chat_id, args, reply_message)
-                elif command == '/roles':
-                    self.handle_roles_list(user_id, chat_id)
-                elif command == '/myrole':
-                    self.handle_my_role(user_id, chat_id)
-                elif command == '/userrole':
-                    self.handle_user_role(user_id, chat_id, args, reply_message)
-                
-                # Основные команды
-                elif command == '/admin':
+                if command == '/admin':
                     self.handle_admin_stats(user_id, chat_id)
+                
                 elif command in ['/createpravila', '/создатьправила', '/правилаустановить']:
                     self.handle_create_rules(user_id, chat_id, args)
+                
                 elif command == '/mute':
                     self.handle_mute(user_id, chat_id, args, reply_message)
+                
                 elif command == '/warn':
                     self.handle_warn(user_id, chat_id, args, reply_message)
+                
                 elif command == '/kick':
                     self.handle_kick(user_id, chat_id, args, reply_message)
+                
                 elif command == '/ban':
                     self.handle_ban(user_id, chat_id, args, reply_message)
+                
                 elif command in ['/приветствие', '/привет', '/welcome']:
                     self.handle_welcome(user_id, chat_id, args)
+                
                 elif command in ['/q', '/quit', '/выйти']:
                     self.handle_self_kick(user_id, chat_id)
+                
+                elif command in ['/snick', '/setnick', '/роль']:
+                    self.handle_set_nick(user_id, chat_id, args, reply_message)
+                
+                elif command in ['/niclist', '/nicklist', '/роли']:
+                    self.handle_nick_list(user_id, chat_id)
+                
                 elif command in ['/правила', '/rules']:
                     self.handle_rules(user_id, chat_id)
+                
                 elif command in ['/размут', '/unmute']:
                     self.handle_unmute(user_id, chat_id, args, reply_message)
+                
                 elif command in ['/разбан', '/unban']:
                     self.handle_unban(user_id, chat_id, args, reply_message)
+                
                 elif command in ['/снятьварн', '/unwarn', '/снятьпред']:
                     self.handle_unwarn(user_id, chat_id, args, reply_message)
-                elif command in ['/инфо', '/info']:
+                
+                elif command == '/инфо':
                     self.handle_info(user_id, chat_id, args, reply_message)
+                
                 elif command in ['/опрос', '/poll', '/голосование']:
                     self.handle_poll(user_id, chat_id, args)
+                
                 elif command in ['/опросрезультаты', '/pollresults', '/результаты']:
                     self.handle_poll_results(user_id, chat_id, args)
-                elif command in ['/cmd', '/CMD', '/команды', '/help']:
-                    self.handle_cmd(user_id, chat_id)
-                elif command in ['/профиль', '/profile']:
+                
+                elif command == '/help':
+                    self.handle_help(user_id, chat_id)
+                
+                elif command == '/профиль':
                     self.handle_profile(user_id, chat_id)
-                elif command in ['/онлайн', '/online']:
+                
+                elif command == '/онлайн':
                     self.handle_online(user_id, chat_id)
+                
                 else:
-                    self.send_message(chat_id, f"{EMOJIS['cross']} Неизвестная команда. Используйте /CMD для списка команд.")
+                    self.send_message(chat_id, f"{EMOJIS['cross']} Неизвестная команда. Используйте /help для списка команд.")
             
             elif reply_message and reply_message.get('from_id') == -int(GROUP_ID):
                 reply_text = reply_message.get('text', '')
                 if 'Опрос #' in reply_text and text.strip().isdigit():
                     self.handle_poll_vote(user_id, chat_id, reply_message, text)
             
-            # Добавляем пользователя в базу
             self.db.add_user(user_id, chat_id)
             
         except Exception as e:
             print(f"{EMOJIS['cross']} Ошибка обработки сообщения: {e}")
     
     def run(self):
-        """Запуск бота"""
-        # Запускаем поток проверки наказаний
         punishment_thread = threading.Thread(target=self.check_punishments, daemon=True)
         punishment_thread.start()
         
-        print(f"\n{EMOJIS['robot']} Бот запущен и слушает сообщения...")
-        print(f"{EMOJIS['crown']} Админы определяются автоматически")
-        print(f"{EMOJIS['role']} Система ролей с приоритетами активна")
-        print(f"{EMOJIS['welcome']} Приветствие работает (исправлено)")
-        print(f"{EMOJIS['cmd']} Команда /CMD - полный список команд")
-        print(f"{EMOJIS['gear']} База данных: avrora_bot.db\n")
+        print(f"{EMOJIS['robot']} Бот запущен и слушает сообщения...")
+        print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в каждом чате")
+        print(f"{EMOJIS['gear']} База данных: avrora_bot.db")
+        print(f"{EMOJIS['info']} Новые команды: /инфо, /опрос, /опросрезультаты")
+        print(f"{EMOJIS['check']} Исправлены баги с /createpravila и /приветствие")
         
         for event in self.longpoll.listen():
             try:
@@ -2270,12 +1792,8 @@ class VKAvroraBot:
                     if event.from_chat:
                         self.process_message(event)
                 
-                elif event.type == VkBotEventType.CHAT_INVITE_USER:
-                    if event.object.get('user_id') == -int(GROUP_ID):
-                        # Бота добавили в чат
-                        chat_id = event.chat_id
-                        inviter_id = event.object.get('from_id')
-                        self.handle_bot_added(chat_id, inviter_id)
+                elif event.type == VkBotEventType.MESSAGE_EVENT:
+                    pass
                 
                 elif event.type == VkBotEventType.MESSAGE_ALLOW:
                     if 'chat_id' in event.object:
@@ -2291,17 +1809,32 @@ if __name__ == "__main__":
     {EMOJIS['robot']} ====================================
     🤖 AVRORA Manager Bot
     👑 Управление чатом ВКонтакте
-    {EMOJIS['role']} Система ролей с приоритетами
-    {EMOJIS['cmd']} Полный список команд: /CMD
+    🚀 Запуск...
     {EMOJIS['robot']} ====================================
     """)
     
     print(f"{EMOJIS['light']} Проверяем права бота...")
+    print(f"{EMOJIS['light']} Для работы мута боту нужны права:")
+    print(f"{EMOJIS['check']} Управление беседой")
+    print(f"{EMOJIS['check']} Удаление сообщений (обязательно для мута)")
+    print(f"{EMOJIS['check']} Исключение участников")
+    print(f"{EMOJIS['light']} Убедитесь, что бот добавлен как администратор в чате!")
     
     if GROUP_TOKEN == "YOUR_VK_GROUP_TOKEN_HERE":
         print(f"{EMOJIS['cross']} ОШИБКА: Замените GROUP_TOKEN на валидный токен группы VK!")
+        print(f"""
+    {EMOJIS['light']} Как получить токен:
+    1. Создайте группу ВК или используйте существующую
+    2. Перейдите в Управление -> Работа с API
+    3. Создайте ключ с правами:
+       {EMOJIS['check']} messages
+       {EMOJIS['check']} manage_chat
+       {EMOJIS['check']} photos
+    4. Скопируйте токен и вставьте в код
+        """)
     elif GROUP_ID == "YOUR_GROUP_ID_HERE":
         print(f"{EMOJIS['cross']} ОШИБКА: Замените GROUP_ID на ID вашей группы (только цифры)!")
+        print(f"{EMOJIS['light']} ID группы можно найти в ссылке: vk.com/public123456 -> 123456")
     else:
         try:
             bot = VKAvroraBot()
