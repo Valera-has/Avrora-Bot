@@ -272,6 +272,15 @@ class Database:
         row = self.cursor.fetchone()
         return row[0] if row else None
     
+    def delete_role(self, user_id: int, chat_id: int) -> bool:
+        """Удаляет роль пользователя"""
+        self.cursor.execute(
+            "DELETE FROM roles WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id)
+        )
+        self.conn.commit()
+        return self.cursor.rowcount > 0
+    
     def get_all_roles(self, chat_id: int) -> List[Tuple]:
         self.cursor.execute(
             "SELECT user_id, role_name FROM roles WHERE chat_id = ?",
@@ -1139,6 +1148,40 @@ class VKAvroraBot:
 """.strip()
         self.send_message(chat_id, message)
     
+    def handle_delete_nick(self, user_id: int, chat_id: int, args: str, reply_message: Optional[Dict] = None):
+        """Команда /delnick - удаление роли пользователя"""
+        if not self.is_chat_admin(user_id, chat_id):
+            self.send_message(chat_id, f"{EMOJIS['cross']} Эта команда только для администраторов чата!")
+            return
+        
+        target_id = self.extract_mention_or_id(args, reply_message)
+        if not target_id:
+            self.send_message(chat_id, f"""{EMOJIS['role']} Использование:
+1. /delnick @avroramanager
+2. /delnick (при ответе на сообщение)
+
+{EMOJIS['light']} Примеры:
+/delnick @avroramanager
+/delnick (при ответе на сообщение)""")
+            return
+        
+        if self.db.delete_role(target_id, chat_id):
+            target_info = self.get_user_info(target_id)
+            admin_info = self.get_user_info(user_id)
+            
+            message = f"""{EMOJIS['check']} {EMOJIS['role']} Роль удалена
+
+{EMOJIS['user']} Пользователь: [id{target_id}|{target_info['full_name']}]
+{EMOJIS['police']} Администратор: [id{user_id}|{admin_info['full_name']}]
+
+{EMOJIS['light']} Роль пользователя удалена из списка.
+""".strip()
+        else:
+            target_info = self.get_user_info(target_id)
+            message = f"{EMOJIS['cross']} У пользователя [id{target_id}|{target_info['full_name']}] нет активной роли."
+        
+        self.send_message(chat_id, message)
+    
     def handle_nick_list(self, user_id: int, chat_id: int):
         roles = self.db.get_all_roles(chat_id)
         
@@ -1502,6 +1545,7 @@ class VKAvroraBot:
 {EMOJIS['no_entry']} /ban [@avroramanager или ответ] время причина - Бан пользователя
 {EMOJIS['welcome']} /приветствие текст - Установить приветствие
 {EMOJIS['role']} /snick [@avroramanager или ответ] роль - Выдать роль
+{EMOJIS['role']} /delnick [@avroramanager или ответ] - Удалить роль
 {EMOJIS['unlock']} /размут [@avroramanager или ответ] - Снять мут
 {EMOJIS['unlock']} /разбан [@avroramanager или ответ] - Снять бан
 {EMOJIS['check']} /снятьварн [@avroramanager или ответ] - Снять предупреждение
@@ -1730,6 +1774,9 @@ class VKAvroraBot:
                 elif command in ['/snick', '/setnick', '/роль']:
                     self.handle_set_nick(user_id, chat_id, args, reply_message)
                 
+                elif command in ['/delnick', '/deletenick', '/удалитьроль']:
+                    self.handle_delete_nick(user_id, chat_id, args, reply_message)
+                
                 elif command in ['/niclist', '/nicklist', '/роли']:
                     self.handle_nick_list(user_id, chat_id)
                 
@@ -1783,7 +1830,7 @@ class VKAvroraBot:
         print(f"{EMOJIS['robot']} Бот запущен и слушает сообщения...")
         print(f"{EMOJIS['crown']} Админы определяются автоматически по правам в каждом чате")
         print(f"{EMOJIS['gear']} База данных: avrora_bot.db")
-        print(f"{EMOJIS['info']} Новые команды: /инфо, /опрос, /опросрезультаты")
+        print(f"{EMOJIS['info']} Новые команды: /инфо, /опрос, /опросрезультаты, /delnick")
         print(f"{EMOJIS['check']} Исправлены баги с /createpravila и /приветствие")
         
         for event in self.longpoll.listen():
