@@ -17,9 +17,8 @@ GROUP_ID = "235560929"
 CALL_NAMES = ["фрост", "frost", "@frost"]
 
 # ========== СОЗДАЕМ API С ТАЙМАУТАМИ ==========
+# ========== СОЗДАЕМ API ==========
 api = API(token=VK_TOKEN)
-# Увеличиваем таймауты
-api.http_client.timeout = 60  # 60 секунд вместо 35
 
 bot = Bot(token=VK_TOKEN)
 bp = Blueprint()
