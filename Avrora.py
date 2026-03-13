@@ -12,7 +12,7 @@ from vkbottle import GroupEventType  # ВАЖНО: добавил этот им�
 
 # ========== НАСТРОЙКИ ==========
 VK_TOKEN = "vk1.a.o_e86tU572NCbaSCKfBUOWk8kV-Ch99M2d0B-5Hp6d4-08M3AzqmxTdw5DNhjNvapQ4Aro1U6yatm2U2AiUG_A4IogNInCEjMmK05SMyB7wxZjgDgVG7XfioPR6vmF2u0kDZZeeueUi24CapZlC8-lO65mwcOpIxg_JBiyrjzB7S96RDvxl3SE0yfDY15BjqRbGKg2qRZGHko0NsZAuZ4g"
-GROUP_ID = "235560929"ы
+GROUP_ID = "235560929"
 
 # Ключевые слова для обращения к боту
 CALL_NAMES = ["фрост", "frost", "@frost"]
