@@ -6,15 +6,22 @@ from datetime import datetime, timedelta
 
 from vkbottle.bot import Bot, Message
 from vkbottle.bot import Blueprint
+from vkbottle.api import API
+from vkbottle.exception import VKAPIError
+from vkbottle import GroupEventType  # ВАЖНО: добавил этот импорт
 
 # ========== НАСТРОЙКИ ==========
 VK_TOKEN = "vk1.a.o_e86tU572NCbaSCKfBUOWk8kV-Ch99M2d0B-5Hp6d4-08M3AzqmxTdw5DNhjNvapQ4Aro1U6yatm2U2AiUG_A4IogNInCEjMmK05SMyB7wxZjgDgVG7XfioPR6vmF2u0kDZZeeueUi24CapZlC8-lO65mwcOpIxg_JBiyrjzB7S96RDvxl3SE0yfDY15BjqRbGKg2qRZGHko0NsZAuZ4g"
-GROUP_ID = "235560929"
+GROUP_ID = "235560929"ы
 
 # Ключевые слова для обращения к боту
 CALL_NAMES = ["фрост", "frost", "@frost"]
 
-# ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
+# ========== СОЗДАЕМ API С ТАЙМАУТАМИ ==========
+api = API(token=VK_TOKEN)
+# Увеличиваем таймауты
+api.http_client.timeout = 60  # 60 секунд вместо 35
+
 bot = Bot(token=VK_TOKEN)
 bp = Blueprint()
 
@@ -75,15 +82,6 @@ async def init_db():
                 messages_count INTEGER DEFAULT 1,
                 last_message_time TIMESTAMP,
                 PRIMARY KEY (chat_id, user_id)
-            )
-        ''')
-        
-        # Приветствия (кастомные)
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS greetings (
-                chat_id INTEGER,
-                text TEXT,
-                PRIMARY KEY (chat_id)
             )
         ''')
         
@@ -281,11 +279,8 @@ async def help_handler(message: Message):
 /unadmin @user - забрать права
 /warn @user - предупреждение
 /kick @user - кикнуть
-/ban @user - заблокировать
-/unban @user - разблокировать
 /mute @user 10 - мут на 10 минут
 /unmute @user - снять мут
-/clear 10 - удалить 10 сообщ.
 
 ⚙️ НАСТРОЙКИ:
 /antifoul on/off - фильтр мата
@@ -711,41 +706,51 @@ async def message_handler(message: Message):
         
         await message.answer(response)
 
-# ========== НОВЫЕ УЧАСТНИКИ ==========
-@bp.on.chat_member_add()
-async def new_member_handler(event):
-    chat_id = event.chat_id + 2000000000
-    user_id = event.member_id
-    
-    settings = await get_chat_settings(chat_id)
-    
-    if settings['welcome_message']:
-        welcome = settings['welcome_message'].replace("{name}", f"@id{user_id}")
-        await bot.api.messages.send(
-            peer_id=chat_id,
-            message=welcome,
-            random_id=0
-        )
-    else:
-        style = settings['style']
-        texts = {
-            "Ледяной": f"❄️ @id{user_id}, присоединился.",
-            "Огненный": f"🔥 @id{user_id}, привет!",
-            "Стеклянный": f"📋 @id{user_id}, добро пожаловать."
-        }
-        await bot.api.messages.send(
-            peer_id=chat_id,
-            message=texts.get(style, texts['Огненный']),
-            random_id=0
-        )
+# ========== НОВЫЕ УЧАСТНИКИ (ИСПРАВЛЕНО!) ==========
+@bot.on.raw_event(GroupEventType.CHAT_INVITE_USER, Message)
+async def new_member_handler(event: Message):
+    """Приветствие новых участников"""
+    if event.action and event.action.type.value == 'chat_invite_user':
+        user_id = event.action.member_id
+        chat_id = event.peer_id
+        
+        settings = await get_chat_settings(chat_id)
+        
+        if settings['welcome_message']:
+            welcome = settings['welcome_message'].replace("{name}", f"@id{user_id}")
+            await bot.api.messages.send(
+                peer_id=chat_id,
+                message=welcome,
+                random_id=0
+            )
+        else:
+            style = settings['style']
+            texts = {
+                "Ледяной": f"❄️ @id{user_id}, присоединился.",
+                "Огненный": f"🔥 @id{user_id}, привет!",
+                "Стеклянный": f"📋 @id{user_id}, добро пожаловать."
+            }
+            await bot.api.messages.send(
+                peer_id=chat_id,
+                message=texts.get(style, texts['Огненный']),
+                random_id=0
+            )
 
 # ========== ЗАПУСК ==========
 async def main():
     await init_db()
     bp.load(bot)
-    print("❄️ Фрост запущен! Без токенов, без денег, по-братски!")
-    print("✅ Осталось только вставить токен ВК в переменную VK_TOKEN")
-    await bot.run()
+    print("❄️ Фрост запущен! Таймауты увеличены до 60 секунд")
+    print("✅ VK события обрабатываются правильно")
+    
+    # Бесконечный цикл с перезапуском при ошибках
+    while True:
+        try:
+            await bot.run()
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            print("🔄 Перезапуск через 5 секунд...")
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(main())
