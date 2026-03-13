@@ -4,7 +4,7 @@ import re
 import random
 from datetime import datetime, timedelta
 
-from vkbottle import Bot, Message
+from vkbottle.bot import Bot, Message
 from vkbottle.bot import Blueprint
 
 # ========== НАСТРОЙКИ ==========
