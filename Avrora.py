@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from vkbottle.bot import Bot, Message
 from vkbottle.bot import Blueprint
 from vkbottle.api import API
-from vkbottle.exception import VKAPIError
 from vkbottle import GroupEventType  # ВАЖНО: добавил этот импорт
 
 # ========== НАСТРОЙКИ ==========
