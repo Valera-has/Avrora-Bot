@@ -1,2 +1,2 @@
-vkbottle
+vkbottle==3.0
 aiosqlite
