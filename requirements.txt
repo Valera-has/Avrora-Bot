@@ -1,2 +1,3 @@
-vkbottle==3.0
-aiosqlite
+vk-api
+requests
+psycopg2-binary
