@@ -39,7 +39,8 @@ DEFAULT_COMMAND_SETTINGS = {
     'silent': {'min_priority': 90, 'description': 'Режим тишины'},
     'setrole': {'min_priority': 60, 'description': 'Выдать роль'},
     'createrole': {'min_priority': 99, 'description': 'Создать роль'},
-    'deleterole': {'min_priority': 99, 'description': 'Удалить роль'}
+    'deleterole': {'min_priority': 99, 'description': 'Удалить роль'},
+    'setflood': {'min_priority': 95, 'description': 'Настройка антифлуда'}  # ANTI-FLOOD
 }
 
 def parse_time(time_str):
@@ -195,6 +196,25 @@ def init_db():
         )
     ''')
     
+    # ANTI-FLOOD: таблица настроек антифлуда
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS flood_settings (
+            chat_id INTEGER PRIMARY KEY,
+            messages_per_minute INTEGER DEFAULT 6,
+            mute_minutes INTEGER DEFAULT 10
+        )
+    ''')
+    
+    # ANTI-FLOOD: таблица для отслеживания сообщений
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_messages (
+            user_id INTEGER,
+            chat_id INTEGER,
+            message_time TEXT,
+            PRIMARY KEY (user_id, chat_id, message_time)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
     print("✅ База данных инициализирована")
@@ -289,6 +309,90 @@ def set_command_min_priority(chat_id, command_name, min_priority, user_id):
         conn.commit()
         conn.close()
         return True
+    except:
+        return False
+
+# === ANTI-FLOOD функции ===
+def get_flood_settings(chat_id):
+    try:
+        conn = sqlite3.connect('tom_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT messages_per_minute, mute_minutes FROM flood_settings WHERE chat_id = ?', (chat_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            return result[0], result[1]
+        return 6, 10
+    except:
+        return 6, 10
+
+def set_flood_settings(chat_id, messages_per_minute, mute_minutes=10):
+    try:
+        conn = sqlite3.connect('tom_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO flood_settings (chat_id, messages_per_minute, mute_minutes)
+            VALUES (?, ?, ?)
+        ''', (chat_id, messages_per_minute, mute_minutes))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return False
+
+def clean_old_user_messages(chat_id):
+    """Удаляет сообщения старше 1 минуты"""
+    try:
+        conn = sqlite3.connect('tom_bot.db')
+        cursor = conn.cursor()
+        one_min_ago = (datetime.now() - timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('DELETE FROM user_messages WHERE chat_id = ? AND message_time < ?', (chat_id, one_min_ago))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def check_flood(vk, user_id, chat_id):
+    """Проверяет флуд. Возвращает True если нужно замутить"""
+    try:
+        messages_per_min, mute_min = get_flood_settings(chat_id)
+        
+        if messages_per_min == 0:  # защита отключена
+            return False
+        
+        conn = sqlite3.connect('tom_bot.db')
+        cursor = conn.cursor()
+        
+        now = datetime.now()
+        now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Вставляем текущее сообщение
+        cursor.execute('INSERT INTO user_messages (user_id, chat_id, message_time) VALUES (?, ?, ?)',
+                      (user_id, chat_id, now_str))
+        
+        # Считаем сообщения за последнюю минуту
+        one_min_ago = (now - timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            SELECT COUNT(*) FROM user_messages 
+            WHERE user_id = ? AND chat_id = ? AND message_time >= ?
+        ''', (user_id, chat_id, one_min_ago))
+        
+        count = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        
+        if count > messages_per_min:
+            # Мут на mute_min минут
+            end_time = datetime.now() + timedelta(minutes=mute_min)
+            muted_users[user_id] = {
+                'end_time': end_time,
+                'reason': f'Флуд ({count} сообщений за минуту)',
+                'admin_id': BOT_ID,
+                'chat_id': chat_id
+            }
+            return True
+        
+        return False
     except:
         return False
 
@@ -1077,6 +1181,7 @@ def cmd_help(vk, peer_id, user_id):
     silent_req = get_command_min_priority(peer_id, 'silent')
     createrole_req = get_command_min_priority(peer_id, 'createrole')
     deleterole_req = get_command_min_priority(peer_id, 'deleterole')
+    setflood_req = get_command_min_priority(peer_id, 'setflood')  # ANTI-FLOOD
     
     response = "📚 СПИСОК КОМАНД\n\n"
     
@@ -1118,7 +1223,7 @@ def cmd_help(vk, peer_id, user_id):
         response += "• /setrole @user [приоритет] — выдать роль\n"
         response += "• /unrole @user — снять роль\n\n"
     
-    if user_priority >= silent_req or user_priority >= createrole_req or user_priority >= deleterole_req:
+    if user_priority >= silent_req or user_priority >= createrole_req or user_priority >= deleterole_req or user_priority >= setflood_req:
         response += "🔧 Команды управления:\n"
         if user_priority >= silent_req:
             response += f"• /silent — режим тишины (нужен приоритет {silent_req}+)\n"
@@ -1126,6 +1231,8 @@ def cmd_help(vk, peer_id, user_id):
             response += f"• /createrole [приоритет] [название] — создать роль (нужен приоритет {createrole_req}+)\n"
         if user_priority >= deleterole_req:
             response += f"• /deleterole [приоритет] — удалить роль (нужен приоритет {deleterole_req}+)\n"
+        if user_priority >= setflood_req:  # ANTI-FLOOD
+            response += f"• /setflood [число] — антифлуд (0=выкл, 6=по умолчанию) (нужен приоритет {setflood_req}+)\n"
         if user_priority >= 99:
             response += "• /createcmd [команда] [приоритет] — изменить требования к команде\n"
         response += "\n"
@@ -1136,7 +1243,8 @@ def cmd_help(vk, peer_id, user_id):
     response += "/mute @user 1h спам\n"
     response += "/createcmd mute 30\n"
     response += "/casino 1000\n"
-    response += "/rps @user 500\n\n"
+    response += "/rps @user 500\n"
+    response += "/setflood 10\n\n"  # ANTI-FLOOD
     response += "💡 Форматы суммы: 1к = 1000, 1кк = 1000000\n"
     response += "💡 Форматы времени: 30m, 2h, 1d"
     
@@ -1588,6 +1696,41 @@ def cmd_createcmd(vk, peer_id, user_id, args):
         sms(vk, peer_id, f"✅ Команда '{command_name}' теперь требует приоритет {min_priority}+")
     else:
         sms(vk, peer_id, "❌ Ошибка при обновлении команды")
+
+# ANTI-FLOOD: команда /setflood
+def cmd_setflood(vk, peer_id, user_id, args):
+    if not is_bot_activated(peer_id):
+        sms(vk, peer_id, "❌ Бот не активирован!")
+        return
+    
+    if not can_use_command(peer_id, user_id, 'setflood'):
+        sms(vk, peer_id, f"❌ Недостаточно прав! Нужен приоритет {get_command_min_priority(peer_id, 'setflood')}+")
+        return
+    
+    if not args:
+        current, mute_min = get_flood_settings(peer_id)
+        if current == 0:
+            sms(vk, peer_id, f"🔇 Антифлуд отключен. /setflood <число> (0=выкл, 6=по умолчанию)")
+        else:
+            sms(vk, peer_id, f"📊 Текущий лимит: {current} сообщений в минуту. Мут на {mute_min} минут.\n/setflood <число> (0=выкл)")
+        return
+    
+    try:
+        limit = int(args[0])
+        if limit < 0:
+            limit = 0
+        if limit > 50:
+            limit = 50
+    except:
+        sms(vk, peer_id, "❌ /setflood <число> (0-50, 0=выкл)")
+        return
+    
+    set_flood_settings(peer_id, limit, 10)
+    
+    if limit == 0:
+        sms(vk, peer_id, "✅ Антифлуд отключен. Теперь можно писать без ограничений.")
+    else:
+        sms(vk, peer_id, f"✅ Антифлуд включен: не более {limit} сообщений в минуту. Нарушители получат мут на 10 минут.")
 
 def tom(vk, peer_id):
     if not is_bot_activated(peer_id):
@@ -2309,6 +2452,24 @@ if __name__ == '__main__':
     mute_thread = threading.Thread(target=background_mute_checker, daemon=True)
     mute_thread.start()
     
+    # ANTI-FLOOD: фоновая очистка старых сообщений
+    def background_clean_messages():
+        while True:
+            time.sleep(60)
+            # Очищаем для всех чатов (можно оптимизировать, но для простоты так)
+            try:
+                conn = sqlite3.connect('tom_bot.db')
+                cursor = conn.cursor()
+                one_min_ago = (datetime.now() - timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S')
+                cursor.execute('DELETE FROM user_messages WHERE message_time < ?', (one_min_ago,))
+                conn.commit()
+                conn.close()
+            except:
+                pass
+    
+    clean_thread = threading.Thread(target=background_clean_messages, daemon=True)
+    clean_thread.start()
+    
     for event in longpoll.listen():
         try:
             if event.type == VkBotEventType.MESSAGE_NEW:
@@ -2356,6 +2517,14 @@ if __name__ == '__main__':
                             continue
                         else:
                             del muted_users[user_id]
+                    
+                    # ANTI-FLOOD: проверяем флуд (только если не админ и не команда)
+                    if not text.startswith('/') and user_id > 0:
+                        if check_flood(vk, user_id, peer_id):
+                            # Удаляем сообщение, которое вызвало флуд
+                            delete_message(vk, peer_id, msg_id, conversation_message_id)
+                            sms(vk, peer_id, f"🔇 [id{user_id}|{get_user_name(vk, user_id)}] получил мут за флуд!")
+                            continue
                     
                     silent_enabled, silent_action = get_silent_settings(peer_id)
                     if silent_enabled and not is_chat_admin(vk, peer_id, user_id) and not text.startswith('/'):
@@ -2507,6 +2676,10 @@ if __name__ == '__main__':
                     
                     elif text == "/members":
                         cmd_members(vk, peer_id, user_id, reply_to)
+                    
+                    elif text.startswith("/setflood"):  # ANTI-FLOOD
+                        args = text[9:].strip().split()
+                        cmd_setflood(vk, peer_id, user_id, args)
                     
                     elif text == "том" or text == "том.":
                         tom(vk, peer_id)
